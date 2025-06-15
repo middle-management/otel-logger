@@ -61,6 +61,24 @@ cat app.log | otel-logger --endpoint https://api.example.com/v1/logs \
   --header "Authorization=Bearer your-token" \
   --header "X-API-Key=your-api-key"
 
+# Handle Logstash/ELK format logs
+cat logstash.log | otel-logger --endpoint localhost:4317 \
+  --timestamp-fields "@timestamp" \
+  --level-fields "level" \
+  --message-fields "message"
+
+# Handle Winston (Node.js) format logs
+cat winston.log | otel-logger --endpoint localhost:4317 \
+  --timestamp-fields "timestamp" \
+  --level-fields "level" \
+  --message-fields "message,msg"
+
+# Handle custom application logs
+cat custom.log | otel-logger --endpoint localhost:4317 \
+  --timestamp-fields "created_at,time" \
+  --level-fields "severity,priority" \
+  --message-fields "description,content,text"
+
 # Insecure connection (for development)
 cat app.log | otel-logger --endpoint localhost:4317 --insecure
 ```
@@ -79,6 +97,9 @@ cat app.log | otel-logger --endpoint localhost:4317 --insecure
 | `--json-prefix` | `""` | Regex pattern to extract JSON from prefixed logs |
 | `--batch-size` | `50` | Number of log entries to batch before sending |
 | `--flush-interval` | `5s` | Interval to flush batched logs |
+| `--timestamp-fields` | `[]` | JSON field names for timestamps (see defaults below) |
+| `--level-fields` | `[]` | JSON field names for log levels (see defaults below) |
+| `--message-fields` | `[]` | JSON field names for log messages (see defaults below) |
 
 ## Supported Log Formats
 
@@ -107,14 +128,33 @@ The tool gracefully handles mixed log formats, treating non-JSON lines as plain 
 [ERROR] 2024-01-15 10:30:47 - Failed to load configuration file
 ```
 
-### Recognized JSON Fields
+### Configurable JSON Field Mappings
 
-The tool automatically extracts these common fields:
+The tool can be configured to recognize different JSON field names for timestamps, log levels, and messages. This makes it compatible with various logging frameworks and formats.
 
-- **Timestamps**: `timestamp`, `ts`, `time` (supports various formats including Unix timestamps)
-- **Log levels**: `level`, `lvl`, `severity`
-- **Messages**: `message`, `msg`
+#### Default Field Mappings
+
+- **Timestamps**: `timestamp`, `ts`, `time`, `@timestamp` (supports various formats including Unix timestamps)
+- **Log levels**: `level`, `lvl`, `severity`, `priority`
+- **Messages**: `message`, `msg`, `text`, `content`
 - **All other fields**: Preserved as log attributes
+
+#### Custom Field Mappings
+
+You can override the default field mappings using command-line flags:
+
+```bash
+# Custom timestamp fields (e.g., for Logstash format)
+--timestamp-fields "@timestamp,created_at"
+
+# Custom level fields (e.g., for Winston format)
+--level-fields "level,severity,priority"
+
+# Custom message fields (e.g., for custom application format)
+--message-fields "message,description,log_message"
+```
+
+The tool will check each field in the order specified and use the first match found.
 
 ## Log Level Mapping
 
@@ -173,14 +213,32 @@ echo '{"timestamp": "2024-01-15T10:30:45Z", "level": "info", "message": "Hello W
   ./otel-logger --endpoint localhost:4317
 ```
 
-### Example 2: Docker application logs
+### Example 2: Custom field mappings
+
+```bash
+# Logstash/Elasticsearch format
+echo '{"@timestamp": "2024-01-15T10:30:45Z", "level": "ERROR", "message": "Database connection failed"}' | \
+  ./otel-logger --endpoint localhost:4317 \
+  --timestamp-fields "@timestamp" \
+  --level-fields "level" \
+  --message-fields "message"
+
+# Custom application format
+echo '{"created_at": "2024-01-15T10:30:45Z", "severity": "high", "description": "Payment processing error", "details": "Card declined"}' | \
+  ./otel-logger --endpoint localhost:4317 \
+  --timestamp-fields "created_at,timestamp" \
+  --level-fields "severity,level" \
+  --message-fields "description,message"
+```
+
+### Example 3: Docker application logs
 
 ```bash
 # Forward Docker container logs
 docker logs -f myapp 2>&1 | ./otel-logger --endpoint localhost:4317 --service-name myapp
 ```
 
-### Example 3: Application with prefixed logs
+### Example 4: Application with prefixed logs
 
 ```bash
 # Handle logs with timestamp prefixes
@@ -190,7 +248,7 @@ tail -f /var/log/myapp.log | ./otel-logger \
   --json-prefix "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[.\\d]*Z?\\s*"
 ```
 
-### Example 4: High-throughput scenario
+### Example 5: High-throughput scenario
 
 ```bash
 # Optimize for high throughput

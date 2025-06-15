@@ -167,23 +167,58 @@ EOF
 
     sleep 2
 
-    # Demo 5: Example log files
+    # Demo 5: Configurable field mappings - Logstash format
+    print_info "Demo 5: Sending Logstash format logs with custom field mappings..."
+    cat << 'EOF' | ./otel-logger --endpoint localhost:4317 --service-name logstash-demo --timestamp-fields "@timestamp" --level-fields "level" --message-fields "message"
+{"@timestamp": "2024-01-15T10:30:47Z", "level": "INFO", "message": "Application startup completed", "service": "web-api", "host": "server-001"}
+{"@timestamp": "2024-01-15T10:30:48Z", "level": "WARN", "message": "High memory usage detected", "memory_usage_percent": 87.5, "threshold": 85.0}
+{"@timestamp": "2024-01-15T10:30:49Z", "level": "ERROR", "message": "Database connection failed", "error_code": "DB_TIMEOUT", "retry_count": 3}
+EOF
+    print_success "Logstash format logs sent"
+
+    sleep 2
+
+    # Demo 6: Custom application format with multiple field mappings
+    print_info "Demo 6: Sending custom format logs with multiple field mappings..."
+    cat << 'EOF' | ./otel-logger --endpoint localhost:4317 --service-name custom-demo --timestamp-fields "created_at,event_time" --level-fields "severity,priority" --message-fields "description,content"
+{"created_at": "2024-01-15T10:30:50Z", "severity": "high", "description": "Payment processing failed", "transaction_id": "txn_abc123", "amount": 99.99}
+{"event_time": "2024-01-15T10:30:51Z", "priority": "medium", "content": "User profile updated successfully", "user_id": "usr_456", "changes": ["email", "phone"]}
+{"created_at": "2024-01-15T10:30:52Z", "severity": "low", "description": "Cache warming completed", "keys_loaded": 50000, "time_ms": 2500}
+EOF
+    print_success "Custom format logs sent"
+
+    sleep 2
+
+    # Demo 7: Example log files
     if [ -f "examples/json-logs.txt" ]; then
-        print_info "Demo 5: Sending example JSON logs from file..."
+        print_info "Demo 7: Sending example JSON logs from file..."
         cat examples/json-logs.txt | ./otel-logger --endpoint localhost:4317 --service-name file-demo --batch-size 5
         print_success "Example JSON logs sent"
     fi
 
     if [ -f "examples/mixed-logs.txt" ]; then
-        print_info "Demo 6: Sending mixed format logs from file..."
+        print_info "Demo 8: Sending mixed format logs from file..."
         cat examples/mixed-logs.txt | ./otel-logger --endpoint localhost:4317 --service-name mixed-demo --batch-size 3
         print_success "Mixed format logs sent"
     fi
 
+    # Demo 9: Example format files with custom mappings
+    if [ -f "examples/logstash-format.txt" ]; then
+        print_info "Demo 9: Sending Logstash format example logs..."
+        cat examples/logstash-format.txt | ./otel-logger --endpoint localhost:4317 --service-name logstash-file-demo --timestamp-fields "@timestamp" --level-fields "level" --message-fields "message" --batch-size 3
+        print_success "Logstash format example logs sent"
+    fi
+
+    if [ -f "examples/custom-format.txt" ]; then
+        print_info "Demo 10: Sending custom format example logs..."
+        cat examples/custom-format.txt | ./otel-logger --endpoint localhost:4317 --service-name custom-file-demo --timestamp-fields "created_at,event_time,occurred_at" --level-fields "severity,priority,log_level" --message-fields "description,content,log_text" --batch-size 3
+        print_success "Custom format example logs sent"
+    fi
+
     sleep 2
 
-    # Demo 7: High throughput test
-    print_info "Demo 7: High throughput test (100 log entries)..."
+    # Demo 11: High throughput test
+    print_info "Demo 11: High throughput test (100 log entries)..."
     for i in {1..100}; do
         echo "{\"timestamp\": \"$(date -Iseconds)\", \"level\": \"info\", \"message\": \"High throughput test message $i\", \"iteration\": $i, \"batch\": \"throughput-test\"}"
     done | ./otel-logger --endpoint localhost:4317 --service-name throughput-demo --batch-size 50 --flush-interval 1s
@@ -248,6 +283,14 @@ show_examples() {
 
     echo -e "${YELLOW}Send Docker container logs:${NC}"
     echo "docker logs -f container-name 2>&1 | ./otel-logger --endpoint localhost:4317 --service-name container-name"
+    echo
+
+    echo -e "${YELLOW}Send Logstash format logs:${NC}"
+    echo "cat logstash.log | ./otel-logger --endpoint localhost:4317 --timestamp-fields '@timestamp' --level-fields 'level' --message-fields 'message'"
+    echo
+
+    echo -e "${YELLOW}Send custom format logs:${NC}"
+    echo "cat custom.log | ./otel-logger --endpoint localhost:4317 --timestamp-fields 'created_at,event_time' --level-fields 'severity,priority' --message-fields 'description,content'"
     echo
 
     echo -e "${YELLOW}Query logs in Elasticsearch:${NC}"

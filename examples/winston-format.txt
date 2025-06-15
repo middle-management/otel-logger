@@ -1,0 +1,12 @@
+{"timestamp": "2024-01-15T10:30:45.123Z", "level": "info", "message": "Server started successfully", "service": "express-api", "port": 3000, "env": "production"}
+{"timestamp": "2024-01-15T10:30:46.456Z", "level": "debug", "message": "Database connection established", "database": "mongodb", "host": "localhost:27017", "connectionPoolSize": 10}
+{"timestamp": "2024-01-15T10:30:47.789Z", "level": "warn", "message": "Deprecated API endpoint accessed", "endpoint": "/api/v1/users", "clientIP": "10.0.1.25", "userAgent": "axios/0.21.1"}
+{"timestamp": "2024-01-15T10:30:48.012Z", "level": "error", "message": "Authentication failed", "userId": null, "attemptedEmail": "invalid@example.com", "reason": "invalid_credentials", "ip": "192.168.1.50"}
+{"timestamp": "2024-01-15T10:30:49.345Z", "level": "info", "message": "User logged in successfully", "userId": "user_12345", "email": "john.doe@example.com", "sessionId": "sess_abcdef", "loginMethod": "password"}
+{"timestamp": "2024-01-15T10:30:50.678Z", "level": "error", "message": "Database query failed", "query": "findUserById", "queryId": "query_789", "error": "Connection timeout", "duration": 30000}
+{"timestamp": "2024-01-15T10:30:51.901Z", "level": "debug", "message": "Cache miss for user profile", "userId": "user_12345", "cacheKey": "profile:user_12345", "fallbackToDatabase": true}
+{"timestamp": "2024-01-15T10:30:52.234Z", "level": "info", "message": "HTTP request processed", "method": "POST", "url": "/api/orders", "statusCode": 201, "responseTime": 245, "requestId": "req_xyz789"}
+{"timestamp": "2024-01-15T10:30:53.567Z", "level": "warn", "message": "Memory usage high", "memoryUsage": {"rss": 134217728, "heapTotal": 67108864, "heapUsed": 58720256, "external": 1048576}, "threshold": 0.85}
+{"timestamp": "2024-01-15T10:30:54.890Z", "level": "error", "message": "External API call failed", "apiName": "payment-service", "endpoint": "https://api.stripe.com/v1/charges", "statusCode": 503, "retryAttempt": 2, "maxRetries": 3}
+{"timestamp": "2024-01-15T10:30:55.123Z", "level": "info", "message": "Background job completed", "jobName": "email-notifications", "jobId": "job_def456", "itemsProcessed": 1250, "duration": 15000, "status": "completed"}
+{"timestamp": "2024-01-15T10:30:56.456Z", "level": "debug", "message": "WebSocket connection established", "socketId": "socket_ghi789", "userId": "user_12345", "rooms": ["general", "notifications"], "clientVersion": "1.2.3"}

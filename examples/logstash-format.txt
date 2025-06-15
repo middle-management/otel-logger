@@ -1,0 +1,12 @@
+{"@timestamp": "2024-01-15T10:30:45.123Z", "level": "INFO", "message": "Application started successfully", "service": "web-api", "host": "server-001", "port": 8080}
+{"@timestamp": "2024-01-15T10:30:46.456Z", "level": "DEBUG", "message": "Database connection pool initialized", "db_host": "postgres-01", "pool_size": 20, "max_connections": 100}
+{"@timestamp": "2024-01-15T10:30:47.789Z", "level": "WARN", "message": "High memory usage detected", "memory_usage_percent": 87.5, "threshold_percent": 85.0, "available_mb": 512}
+{"@timestamp": "2024-01-15T10:30:48.012Z", "level": "ERROR", "message": "Payment processing failed", "error_code": "CARD_DECLINED", "transaction_id": "txn_abc123", "amount": 99.99, "currency": "USD"}
+{"@timestamp": "2024-01-15T10:30:49.345Z", "level": "INFO", "message": "User authentication successful", "user_id": "user_789", "session_id": "sess_def456", "ip_address": "192.168.1.100", "user_agent": "Mozilla/5.0"}
+{"@timestamp": "2024-01-15T10:30:50.678Z", "level": "FATAL", "message": "Critical system failure - shutting down", "component": "core_engine", "exit_code": 1, "uptime_seconds": 3600}
+{"@timestamp": "2024-01-15T10:30:51.901Z", "level": "TRACE", "message": "Function entry", "function_name": "processOrder", "execution_id": "exec_123", "thread_id": "thread_001"}
+{"@timestamp": "2024-01-15T10:30:52.234Z", "level": "DEBUG", "message": "Cache operation completed", "operation": "GET", "cache_key": "user:profile:789", "hit": true, "ttl_seconds": 3600}
+{"@timestamp": "2024-01-15T10:30:53.567Z", "level": "WARN", "message": "API rate limit approaching", "client_id": "client_456", "current_requests": 950, "limit": 1000, "window_minutes": 1}
+{"@timestamp": "2024-01-15T10:30:54.890Z", "level": "INFO", "message": "Background job completed", "job_type": "data_export", "records_processed": 15000, "duration_ms": 45000, "status": "SUCCESS"}
+{"@timestamp": "2024-01-15T10:30:55.123Z", "level": "ERROR", "message": "External service timeout", "service_name": "payment_gateway", "endpoint": "https://api.payments.com/charge", "timeout_ms": 30000, "retry_attempt": 2}
+{"@timestamp": "2024-01-15T10:30:56.456Z", "level": "INFO", "message": "Health check passed", "component": "load_balancer", "response_time_ms": 15, "status": "healthy", "checks_passed": 5, "checks_total": 5}

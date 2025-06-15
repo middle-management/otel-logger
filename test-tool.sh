@@ -169,7 +169,80 @@ cat test-logs/empty-test.log | \
     timeout 2s $BINARY --endpoint "nonexistent:4317" --service-name "empty-test" 2>&1 | \
     grep -q "Reading logs from stdin" && print_success "Empty/whitespace logs test initiated" || print_warning "Empty/whitespace logs test may have issues"
 
-# Test 13: Test large log entry
+# Test 13: Test configurable timestamp fields
+print_test "Testing configurable timestamp fields..."
+cat > test-logs/timestamp-fields-test.log << 'EOF'
+{"@timestamp": "2024-01-15T10:30:45Z", "level": "info", "message": "Logstash format"}
+{"created_at": "2024-01-15T10:30:46Z", "severity": "high", "description": "Custom format"}
+{"event_time": "2024-01-15T10:30:47Z", "priority": "medium", "content": "Another custom format"}
+EOF
+
+cat test-logs/timestamp-fields-test.log | \
+    timeout 2s $BINARY --endpoint "nonexistent:4317" --service-name "timestamp-fields-test" \
+    --timestamp-fields "@timestamp,created_at,event_time" 2>&1 | \
+    grep -q "Reading logs from stdin" && print_success "Configurable timestamp fields test initiated" || print_warning "Configurable timestamp fields test may have issues"
+
+# Test 14: Test configurable level fields
+print_test "Testing configurable level fields..."
+cat > test-logs/level-fields-test.log << 'EOF'
+{"timestamp": "2024-01-15T10:30:45Z", "severity": "high", "message": "Custom severity field"}
+{"timestamp": "2024-01-15T10:30:46Z", "priority": "medium", "message": "Custom priority field"}
+{"timestamp": "2024-01-15T10:30:47Z", "log_level": "critical", "message": "Custom log_level field"}
+EOF
+
+cat test-logs/level-fields-test.log | \
+    timeout 2s $BINARY --endpoint "nonexistent:4317" --service-name "level-fields-test" \
+    --level-fields "severity,priority,log_level" 2>&1 | \
+    grep -q "Reading logs from stdin" && print_success "Configurable level fields test initiated" || print_warning "Configurable level fields test may have issues"
+
+# Test 15: Test configurable message fields
+print_test "Testing configurable message fields..."
+cat > test-logs/message-fields-test.log << 'EOF'
+{"timestamp": "2024-01-15T10:30:45Z", "level": "info", "description": "Custom description field"}
+{"timestamp": "2024-01-15T10:30:46Z", "level": "warn", "content": "Custom content field"}
+{"timestamp": "2024-01-15T10:30:47Z", "level": "error", "log_text": "Custom log_text field"}
+EOF
+
+cat test-logs/message-fields-test.log | \
+    timeout 2s $BINARY --endpoint "nonexistent:4317" --service-name "message-fields-test" \
+    --message-fields "description,content,log_text" 2>&1 | \
+    grep -q "Reading logs from stdin" && print_success "Configurable message fields test initiated" || print_warning "Configurable message fields test may have issues"
+
+# Test 16: Test combined custom field mappings
+print_test "Testing combined custom field mappings..."
+cat > test-logs/combined-fields-test.log << 'EOF'
+{"created_at": "2024-01-15T10:30:45Z", "severity": "high", "description": "Payment failed", "transaction_id": "txn_123"}
+{"event_time": "2024-01-15T10:30:46Z", "priority": "medium", "content": "User logged in", "user_id": "user_456"}
+{"occurred_at": "2024-01-15T10:30:47Z", "log_level": "normal", "log_text": "Backup completed", "backup_size": "1.2GB"}
+EOF
+
+cat test-logs/combined-fields-test.log | \
+    timeout 2s $BINARY --endpoint "nonexistent:4317" --service-name "combined-fields-test" \
+    --timestamp-fields "created_at,event_time,occurred_at" \
+    --level-fields "severity,priority,log_level" \
+    --message-fields "description,content,log_text" 2>&1 | \
+    grep -q "Reading logs from stdin" && print_success "Combined custom field mappings test initiated" || print_warning "Combined custom field mappings test may have issues"
+
+# Test 17: Test example format files with custom mappings
+if [ -f "examples/logstash-format.txt" ]; then
+    print_test "Testing Logstash format with custom mappings..."
+    cat examples/logstash-format.txt | \
+        timeout 3s $BINARY --endpoint "nonexistent:4317" --service-name "logstash-test" \
+        --timestamp-fields "@timestamp" --level-fields "level" --message-fields "message" 2>&1 | \
+        grep -q "Reading logs from stdin" && print_success "Logstash format test initiated" || print_warning "Logstash format test may have issues"
+fi
+
+if [ -f "examples/custom-format.txt" ]; then
+    print_test "Testing custom format with multiple field mappings..."
+    cat examples/custom-format.txt | \
+        timeout 3s $BINARY --endpoint "nonexistent:4317" --service-name "custom-format-test" \
+        --timestamp-fields "created_at,event_time,occurred_at" \
+        --level-fields "severity,priority,log_level" \
+        --message-fields "description,content,log_text" 2>&1 | \
+        grep -q "Reading logs from stdin" && print_success "Custom format test initiated" || print_warning "Custom format test may have issues"
+fi
+
+# Test 18: Test large log entry
 print_test "Testing large log entry..."
 LARGE_MESSAGE=$(python3 -c "print('x' * 1000)" 2>/dev/null || echo "Large message content here - Python not available for generating 1000 chars")
 echo "{\"timestamp\": \"2024-01-15T10:30:45Z\", \"level\": \"info\", \"message\": \"$LARGE_MESSAGE\", \"data\": {\"key1\": \"value1\", \"key2\": \"value2\", \"key3\": \"value3\"}}" | \
@@ -192,5 +265,9 @@ echo
 echo "Then test with:"
 echo "  echo '{\"timestamp\": \"2024-01-15T10:30:45Z\", \"level\": \"info\", \"message\": \"Hello OTEL!\"}' | \\"
 echo "    ./otel-logger --endpoint localhost:4317 --service-name test-app"
+echo
+echo "Test custom field mappings:"
+echo "  echo '{\"@timestamp\": \"2024-01-15T10:30:45Z\", \"severity\": \"high\", \"description\": \"Custom fields test\"}' | \\"
+echo "    ./otel-logger --endpoint localhost:4317 --timestamp-fields '@timestamp' --level-fields 'severity' --message-fields 'description'"
 echo
 print_success "Test suite completed!"

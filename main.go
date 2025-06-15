@@ -28,16 +28,19 @@ import (
 )
 
 var (
-	endpoint       string
-	protocol       string
-	serviceName    string
-	serviceVersion string
-	insecure       bool
-	timeout        time.Duration
-	headers        []string
-	jsonPrefix     string
-	batchSize      int
-	flushInterval  time.Duration
+	endpoint        string
+	protocol        string
+	serviceName     string
+	serviceVersion  string
+	insecure        bool
+	timeout         time.Duration
+	headers         []string
+	jsonPrefix      string
+	batchSize       int
+	flushInterval   time.Duration
+	timestampFields []string
+	levelFields     []string
+	messageFields   []string
 )
 
 // LogEntry represents a parsed log entry
@@ -49,9 +52,17 @@ type LogEntry struct {
 	Raw       string
 }
 
+// FieldMappings defines configurable field name mappings for JSON log parsing
+type FieldMappings struct {
+	TimestampFields []string
+	LevelFields     []string
+	MessageFields   []string
+}
+
 // JSONExtractor helps extract JSON from potentially prefixed log lines
 type JSONExtractor struct {
-	prefixRegex *regexp.Regexp
+	prefixRegex   *regexp.Regexp
+	fieldMappings *FieldMappings
 }
 
 // LogBatcher batches log entries for efficient sending
@@ -64,7 +75,7 @@ type LogBatcher struct {
 	done          chan struct{}
 }
 
-func NewJSONExtractor(prefix string) *JSONExtractor {
+func NewJSONExtractor(prefix string, fieldMappings *FieldMappings) *JSONExtractor {
 	var regex *regexp.Regexp
 	if prefix != "" {
 		regex = regexp.MustCompile(prefix)
@@ -72,7 +83,10 @@ func NewJSONExtractor(prefix string) *JSONExtractor {
 		// Default pattern to match common timestamp prefixes
 		regex = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}[.\d]*[Z\-+\d:]*\s*)?(.*)$`)
 	}
-	return &JSONExtractor{prefixRegex: regex}
+	return &JSONExtractor{
+		prefixRegex:   regex,
+		fieldMappings: fieldMappings,
+	}
 }
 
 func (je *JSONExtractor) ExtractJSON(line string) string {
@@ -111,53 +125,53 @@ func (je *JSONExtractor) ParseLogEntry(line string) (*LogEntry, error) {
 		return entry, nil
 	}
 
-	// Extract timestamp
-	if timestamp, ok := jsonData["timestamp"].(string); ok {
-		if t, err := parseTimestamp(timestamp); err == nil {
-			entry.Timestamp = t
+	// Extract timestamp using configurable field mappings
+	timestampExtracted := false
+	for _, field := range je.fieldMappings.TimestampFields {
+		if timestampStr, ok := jsonData[field].(string); ok {
+			if t, err := parseTimestamp(timestampStr); err == nil {
+				entry.Timestamp = t
+				timestampExtracted = true
+			}
+			delete(jsonData, field)
+			break
+		} else if timestampNum, ok := jsonData[field].(float64); ok {
+			entry.Timestamp = time.Unix(int64(timestampNum), 0)
+			timestampExtracted = true
+			delete(jsonData, field)
+			break
 		}
-		delete(jsonData, "timestamp")
-	} else if ts, ok := jsonData["ts"].(string); ok {
-		if t, err := parseTimestamp(ts); err == nil {
-			entry.Timestamp = t
-		}
-		delete(jsonData, "ts")
-	} else if timeStr, ok := jsonData["time"].(string); ok {
-		if t, err := parseTimestamp(timeStr); err == nil {
-			entry.Timestamp = t
-		}
-		delete(jsonData, "time")
-	} else if timeNum, ok := jsonData["timestamp"].(float64); ok {
-		entry.Timestamp = time.Unix(int64(timeNum), 0)
-		delete(jsonData, "timestamp")
 	}
 
-	if entry.Timestamp.IsZero() {
+	if !timestampExtracted || entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
 	}
 
-	// Extract level
-	if level, ok := jsonData["level"].(string); ok {
-		entry.Level = level
-		delete(jsonData, "level")
-	} else if lvl, ok := jsonData["lvl"].(string); ok {
-		entry.Level = lvl
-		delete(jsonData, "lvl")
-	} else if severity, ok := jsonData["severity"].(string); ok {
-		entry.Level = severity
-		delete(jsonData, "severity")
-	} else {
+	// Extract level using configurable field mappings
+	levelExtracted := false
+	for _, field := range je.fieldMappings.LevelFields {
+		if level, ok := jsonData[field].(string); ok {
+			entry.Level = level
+			levelExtracted = true
+			delete(jsonData, field)
+			break
+		}
+	}
+	if !levelExtracted {
 		entry.Level = "info"
 	}
 
-	// Extract message
-	if message, ok := jsonData["message"].(string); ok {
-		entry.Message = message
-		delete(jsonData, "message")
-	} else if msg, ok := jsonData["msg"].(string); ok {
-		entry.Message = msg
-		delete(jsonData, "msg")
-	} else {
+	// Extract message using configurable field mappings
+	messageExtracted := false
+	for _, field := range je.fieldMappings.MessageFields {
+		if message, ok := jsonData[field].(string); ok {
+			entry.Message = message
+			messageExtracted = true
+			delete(jsonData, field)
+			break
+		}
+	}
+	if !messageExtracted {
 		entry.Message = "Log entry"
 	}
 
@@ -429,6 +443,14 @@ func sendLogsGRPC(entries []*LogEntry) error {
 	return nil
 }
 
+func getDefaultFieldMappings() *FieldMappings {
+	return &FieldMappings{
+		TimestampFields: []string{"timestamp", "ts", "time", "@timestamp"},
+		LevelFields:     []string{"level", "lvl", "severity", "priority"},
+		MessageFields:   []string{"message", "msg", "text", "content"},
+	}
+}
+
 func processLogs(extractor *JSONExtractor, batcher *LogBatcher) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -472,11 +494,35 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	batcher := NewLogBatcher(batchSize, flushInterval, flushFunc)
 	defer batcher.Close()
 
+	// Create field mappings
+	var fieldMappings *FieldMappings
+	if len(timestampFields) > 0 || len(levelFields) > 0 || len(messageFields) > 0 {
+		fieldMappings = &FieldMappings{
+			TimestampFields: timestampFields,
+			LevelFields:     levelFields,
+			MessageFields:   messageFields,
+		}
+		// Use defaults for any empty fields
+		if len(fieldMappings.TimestampFields) == 0 {
+			fieldMappings.TimestampFields = getDefaultFieldMappings().TimestampFields
+		}
+		if len(fieldMappings.LevelFields) == 0 {
+			fieldMappings.LevelFields = getDefaultFieldMappings().LevelFields
+		}
+		if len(fieldMappings.MessageFields) == 0 {
+			fieldMappings.MessageFields = getDefaultFieldMappings().MessageFields
+		}
+	} else {
+		fieldMappings = getDefaultFieldMappings()
+	}
+
 	// Create JSON extractor
-	extractor := NewJSONExtractor(jsonPrefix)
+	extractor := NewJSONExtractor(jsonPrefix, fieldMappings)
 
 	// Process logs from stdin
 	fmt.Fprintf(os.Stderr, "Reading logs from stdin and sending to %s://%s (batch_size=%d)\n", protocol, endpoint, batchSize)
+	fmt.Fprintf(os.Stderr, "Field mappings - Timestamp: %v, Level: %v, Message: %v\n",
+		fieldMappings.TimestampFields, fieldMappings.LevelFields, fieldMappings.MessageFields)
 	if err := processLogs(extractor, batcher); err != nil {
 		return err
 	}
@@ -490,20 +536,40 @@ func main() {
 		Use:   "otel-logger",
 		Short: "Send logs from stdin to OpenTelemetry collector",
 		Long: `otel-logger reads logs from stdin and sends them to an OpenTelemetry collector.
-It can handle JSON logs as well as partial JSON with prefixes like timestamps.
+	It can handle JSON logs as well as partial JSON with prefixes like timestamps.
+	Field mappings are configurable to support different logging frameworks.
 
-Examples:
-  # Send JSON logs via gRPC
-  cat app.log | otel-logger --endpoint localhost:4317 --protocol grpc
+	Examples:
+	  # Send JSON logs via gRPC (uses default field mappings)
+	  cat app.log | otel-logger --endpoint localhost:4317 --protocol grpc
 
-  # Send logs via HTTP with custom service name
-  tail -f app.log | otel-logger --endpoint http://localhost:4318 --protocol http --service-name myapp
+	  # Send logs via HTTP with custom service name
+	  tail -f app.log | otel-logger --endpoint http://localhost:4318 --protocol http --service-name myapp
 
-  # Handle logs with timestamp prefix
-  cat app.log | otel-logger --endpoint localhost:4317 --json-prefix "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z\\s*"
+	  # Handle logs with timestamp prefix
+	  cat app.log | otel-logger --endpoint localhost:4317 --json-prefix "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z\\s*"
 
-  # Batch logs for better performance
-  cat app.log | otel-logger --endpoint localhost:4317 --batch-size 100 --flush-interval 5s`,
+	  # Logstash/ELK format with custom field mappings
+	  cat logstash.log | otel-logger --endpoint localhost:4317 \
+	    --timestamp-fields "@timestamp" --level-fields "level" --message-fields "message"
+
+	  # Custom application format with multiple field options
+	  cat custom.log | otel-logger --endpoint localhost:4317 \
+	    --timestamp-fields "created_at,event_time" \
+	    --level-fields "severity,priority" \
+	    --message-fields "description,content"
+
+	  # Winston.js format
+	  cat winston.log | otel-logger --endpoint localhost:4317 \
+	    --timestamp-fields "timestamp" --level-fields "level" --message-fields "message"
+
+	  # Batch logs for better performance
+	  cat app.log | otel-logger --endpoint localhost:4317 --batch-size 100 --flush-interval 5s
+
+	Field Mapping Defaults:
+	  Timestamps: timestamp, ts, time, @timestamp
+	  Levels:     level, lvl, severity, priority
+	  Messages:   message, msg, text, content`,
 		RunE: runCommand,
 	}
 
@@ -517,6 +583,9 @@ Examples:
 	rootCmd.Flags().StringVar(&jsonPrefix, "json-prefix", "", "Regex pattern to extract JSON from prefixed logs")
 	rootCmd.Flags().IntVar(&batchSize, "batch-size", 50, "Number of log entries to batch before sending")
 	rootCmd.Flags().DurationVar(&flushInterval, "flush-interval", 5*time.Second, "Interval to flush batched logs")
+	rootCmd.Flags().StringArrayVar(&timestampFields, "timestamp-fields", []string{}, "JSON field names for timestamps (default: timestamp,ts,time,@timestamp)")
+	rootCmd.Flags().StringArrayVar(&levelFields, "level-fields", []string{}, "JSON field names for log levels (default: level,lvl,severity,priority)")
+	rootCmd.Flags().StringArrayVar(&messageFields, "message-fields", []string{}, "JSON field names for log messages (default: message,msg,text,content)")
 
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)
