@@ -268,6 +268,35 @@ cat large-log-file.log | ./otel-logger \
 - **Protocol choice**: gRPC typically offers better performance than HTTP for high-volume scenarios
 - **Network**: Consider network latency when setting timeouts
 
+## Testing
+
+### Running Tests
+
+```bash
+# Run all tests
+go test -v
+
+# Run only unit tests
+make test
+
+# Run integration tests
+make test-integration
+
+# Run configuration tests
+make test-config
+
+# Run benchmarks
+make bench
+```
+
+### Test Coverage
+
+The project includes comprehensive tests:
+- **Unit tests**: Core functionality, JSON parsing, field mappings
+- **Integration tests**: Complete log processing pipeline
+- **Configuration tests**: CLI argument parsing and validation
+- **Benchmark tests**: Performance measurement and optimization
+
 ## Troubleshooting
 
 ### Common Issues
@@ -285,17 +314,41 @@ Add verbose output by redirecting stderr:
 cat app.log | ./otel-logger --endpoint localhost:4317 2> debug.log
 ```
 
+### Performance Testing
+
+Check performance with built-in benchmarks:
+
+```bash
+make bench
+```
+
 ## Technical Details
 
 - **CLI Framework**: Uses `go-arg` for clean, lightweight argument parsing
 - **Protocol Support**: Native gRPC and HTTP/HTTPS with protobuf serialization
-- **Performance**: Efficient batching and connection pooling
+- **Performance**: Efficient batching and connection pooling (see benchmarks with `make bench`)
 - **Memory**: Low memory footprint with configurable batch sizes
+- **Testing**: Comprehensive Go test suite with unit, integration, and benchmark tests
 - **Error Handling**: Graceful handling of malformed JSON and connection issues
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+### Development Workflow
+
+1. **Build the project**: `make build`
+2. **Run tests**: `go test -v` or `make test`
+3. **Run integration tests**: `make test-integration`
+4. **Check performance**: `make bench`
+5. **Lint code**: `make lint` (requires golangci-lint)
+
+### Adding Tests
+
+- Add unit tests to `main_test.go`
+- Add configuration tests to `config_test.go`
+- Add integration tests to `integration_test.go`
+- Include benchmarks for performance-critical code
 
 ## License
 
