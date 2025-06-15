@@ -4,8 +4,10 @@ A lightweight CLI tool that reads logs from stdin and forwards them to an OpenTe
 
 ## Features
 
+- **Lightweight CLI**: Built with `go-arg` for clean, fast argument parsing
 - **Multiple protocols**: Supports both gRPC and HTTP/HTTPS protocols
 - **JSON parsing**: Automatically detects and parses JSON log entries
+- **Configurable field mappings**: Support for different logging frameworks (Logstash, Winston, etc.)
 - **Prefix handling**: Extracts JSON from logs with timestamps or other prefixes
 - **Flexible timestamp parsing**: Supports multiple timestamp formats (RFC3339, Unix timestamps, etc.)
 - **Batching**: Efficiently batches log entries for better performance
@@ -282,6 +284,14 @@ Add verbose output by redirecting stderr:
 ```bash
 cat app.log | ./otel-logger --endpoint localhost:4317 2> debug.log
 ```
+
+## Technical Details
+
+- **CLI Framework**: Uses `go-arg` for clean, lightweight argument parsing
+- **Protocol Support**: Native gRPC and HTTP/HTTPS with protobuf serialization
+- **Performance**: Efficient batching and connection pooling
+- **Memory**: Low memory footprint with configurable batch sizes
+- **Error Handling**: Graceful handling of malformed JSON and connection issues
 
 ## Contributing
 

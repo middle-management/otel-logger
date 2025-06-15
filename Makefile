@@ -1,5 +1,6 @@
 # OpenTelemetry Logger Makefile
 # This Makefile provides convenient commands for building, testing, and managing the otel-logger project
+# Uses go-arg for clean command-line argument parsing
 
 # Variables
 BINARY_NAME=otel-logger

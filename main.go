@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
+	"github.com/alexflint/go-arg"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	grpcinsecure "google.golang.org/grpc/credentials/insecure"
@@ -28,20 +28,70 @@ import (
 )
 
 var (
-	endpoint        string
-	protocol        string
-	serviceName     string
-	serviceVersion  string
-	insecure        bool
-	timeout         time.Duration
-	headers         []string
-	jsonPrefix      string
-	batchSize       int
-	flushInterval   time.Duration
-	timestampFields []string
-	levelFields     []string
-	messageFields   []string
+	version   = "dev"
+	buildTime = "unknown"
+	gitCommit = "unknown"
 )
+
+// Config holds all command-line arguments
+type Config struct {
+	Endpoint        string        `arg:"-e,--endpoint" default:"localhost:4317" help:"OpenTelemetry collector endpoint"`
+	Protocol        string        `arg:"-p,--protocol" default:"grpc" help:"Protocol to use (grpc or http)"`
+	ServiceName     string        `arg:"--service-name" default:"otel-logger" help:"Service name for telemetry"`
+	ServiceVersion  string        `arg:"--service-version" default:"1.0.0" help:"Service version for telemetry"`
+	Insecure        bool          `arg:"--insecure" help:"Use insecure connection"`
+	Timeout         time.Duration `arg:"--timeout" default:"10s" help:"Request timeout"`
+	Headers         []string      `arg:"--header,separate" help:"Additional headers (key=value)"`
+	JSONPrefix      string        `arg:"--json-prefix" help:"Regex pattern to extract JSON from prefixed logs"`
+	BatchSize       int           `arg:"--batch-size" default:"50" help:"Number of log entries to batch before sending"`
+	FlushInterval   time.Duration `arg:"--flush-interval" default:"5s" help:"Interval to flush batched logs"`
+	TimestampFields []string      `arg:"--timestamp-fields,separate" help:"JSON field names for timestamps (default: timestamp,ts,time,@timestamp)"`
+	LevelFields     []string      `arg:"--level-fields,separate" help:"JSON field names for log levels (default: level,lvl,severity,priority)"`
+	MessageFields   []string      `arg:"--message-fields,separate" help:"JSON field names for log messages (default: message,msg,text,content)"`
+	ShowVersion     bool          `arg:"--version" help:"Show version information"`
+}
+
+func (Config) Version() string {
+	return fmt.Sprintf("otel-logger %s (built: %s, commit: %s)", version, buildTime, gitCommit)
+}
+
+func (Config) Description() string {
+	return `otel-logger reads logs from stdin and sends them to an OpenTelemetry collector.
+It can handle JSON logs as well as partial JSON with prefixes like timestamps.
+Field mappings are configurable to support different logging frameworks.
+
+Examples:
+  # Send JSON logs via gRPC (uses default field mappings)
+  cat app.log | otel-logger --endpoint localhost:4317 --protocol grpc
+
+  # Send logs via HTTP with custom service name
+  tail -f app.log | otel-logger --endpoint http://localhost:4318 --protocol http --service-name myapp
+
+  # Handle logs with timestamp prefix
+  cat app.log | otel-logger --endpoint localhost:4317 --json-prefix "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z\\s*"
+
+  # Logstash/ELK format with custom field mappings
+  cat logstash.log | otel-logger --endpoint localhost:4317 \
+    --timestamp-fields "@timestamp" --level-fields "level" --message-fields "message"
+
+  # Custom application format with multiple field options
+  cat custom.log | otel-logger --endpoint localhost:4317 \
+    --timestamp-fields "created_at,event_time" \
+    --level-fields "severity,priority" \
+    --message-fields "description,content"
+
+  # Winston.js format
+  cat winston.log | otel-logger --endpoint localhost:4317 \
+    --timestamp-fields "timestamp" --level-fields "level" --message-fields "message"
+
+  # Batch logs for better performance
+  cat app.log | otel-logger --endpoint localhost:4317 --batch-size 100 --flush-interval 5s
+
+Field Mapping Defaults:
+  Timestamps: timestamp, ts, time, @timestamp
+  Levels:     level, lvl, severity, priority
+  Messages:   message, msg, text, content`
+}
 
 // LogEntry represents a parsed log entry
 type LogEntry struct {
@@ -299,17 +349,17 @@ func valueToAnyValue(value interface{}) *commonpb.AnyValue {
 	}
 }
 
-func createExportRequest(entries []*LogEntry) *collogspb.ExportLogsServiceRequest {
+func createExportRequest(entries []*LogEntry, config *Config) *collogspb.ExportLogsServiceRequest {
 	// Create resource
 	resource := &resourcepb.Resource{
 		Attributes: []*commonpb.KeyValue{
 			{
 				Key:   "service.name",
-				Value: valueToAnyValue(serviceName),
+				Value: valueToAnyValue(config.ServiceName),
 			},
 			{
 				Key:   "service.version",
-				Value: valueToAnyValue(serviceVersion),
+				Value: valueToAnyValue(config.ServiceVersion),
 			},
 		},
 	}
@@ -360,16 +410,16 @@ func createExportRequest(entries []*LogEntry) *collogspb.ExportLogsServiceReques
 	}
 }
 
-func sendLogsHTTP(entries []*LogEntry) error {
-	req := createExportRequest(entries)
+func sendLogsHTTP(entries []*LogEntry, config *Config) error {
+	req := createExportRequest(entries, config)
 	data, err := proto.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := endpoint
+	url := config.Endpoint
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		if insecure {
+		if config.Insecure {
 			url = "http://" + url
 		} else {
 			url = "https://" + url
@@ -385,7 +435,7 @@ func sendLogsHTTP(entries []*LogEntry) error {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
-	for _, header := range headers {
+	for _, header := range config.Headers {
 		parts := strings.SplitN(header, "=", 2)
 		if len(parts) == 2 {
 			httpReq.Header.Set(parts[0], parts[1])
@@ -393,9 +443,9 @@ func sendLogsHTTP(entries []*LogEntry) error {
 	}
 
 	client := &http.Client{
-		Timeout: timeout,
+		Timeout: config.Timeout,
 	}
-	if insecure {
+	if config.Insecure {
 		client.Transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
@@ -415,24 +465,24 @@ func sendLogsHTTP(entries []*LogEntry) error {
 	return nil
 }
 
-func sendLogsGRPC(entries []*LogEntry) error {
+func sendLogsGRPC(entries []*LogEntry, config *Config) error {
 	var creds credentials.TransportCredentials
-	if insecure {
+	if config.Insecure {
 		creds = grpcinsecure.NewCredentials()
 	} else {
 		creds = credentials.NewTLS(&tls.Config{})
 	}
 
-	conn, err := grpc.Dial(endpoint, grpc.WithTransportCredentials(creds))
+	conn, err := grpc.Dial(config.Endpoint, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 	defer conn.Close()
 
 	client := collogspb.NewLogsServiceClient(conn)
-	req := createExportRequest(entries)
+	req := createExportRequest(entries, config)
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 
 	_, err = client.Export(ctx, req)
@@ -478,29 +528,33 @@ func processLogs(extractor *JSONExtractor, batcher *LogBatcher) error {
 	return nil
 }
 
-func runCommand(cmd *cobra.Command, args []string) error {
+func runCommand(config *Config) error {
 	// Create flush function based on protocol
 	var flushFunc func([]*LogEntry) error
-	switch strings.ToLower(protocol) {
+	switch strings.ToLower(config.Protocol) {
 	case "grpc":
-		flushFunc = sendLogsGRPC
+		flushFunc = func(entries []*LogEntry) error {
+			return sendLogsGRPC(entries, config)
+		}
 	case "http":
-		flushFunc = sendLogsHTTP
+		flushFunc = func(entries []*LogEntry) error {
+			return sendLogsHTTP(entries, config)
+		}
 	default:
-		return fmt.Errorf("unsupported protocol: %s (supported: grpc, http)", protocol)
+		return fmt.Errorf("unsupported protocol: %s (supported: grpc, http)", config.Protocol)
 	}
 
 	// Create batcher
-	batcher := NewLogBatcher(batchSize, flushInterval, flushFunc)
+	batcher := NewLogBatcher(config.BatchSize, config.FlushInterval, flushFunc)
 	defer batcher.Close()
 
 	// Create field mappings
 	var fieldMappings *FieldMappings
-	if len(timestampFields) > 0 || len(levelFields) > 0 || len(messageFields) > 0 {
+	if len(config.TimestampFields) > 0 || len(config.LevelFields) > 0 || len(config.MessageFields) > 0 {
 		fieldMappings = &FieldMappings{
-			TimestampFields: timestampFields,
-			LevelFields:     levelFields,
-			MessageFields:   messageFields,
+			TimestampFields: config.TimestampFields,
+			LevelFields:     config.LevelFields,
+			MessageFields:   config.MessageFields,
 		}
 		// Use defaults for any empty fields
 		if len(fieldMappings.TimestampFields) == 0 {
@@ -517,10 +571,10 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create JSON extractor
-	extractor := NewJSONExtractor(jsonPrefix, fieldMappings)
+	extractor := NewJSONExtractor(config.JSONPrefix, fieldMappings)
 
 	// Process logs from stdin
-	fmt.Fprintf(os.Stderr, "Reading logs from stdin and sending to %s://%s (batch_size=%d)\n", protocol, endpoint, batchSize)
+	fmt.Fprintf(os.Stderr, "Reading logs from stdin and sending to %s://%s (batch_size=%d)\n", config.Protocol, config.Endpoint, config.BatchSize)
 	fmt.Fprintf(os.Stderr, "Field mappings - Timestamp: %v, Level: %v, Message: %v\n",
 		fieldMappings.TimestampFields, fieldMappings.LevelFields, fieldMappings.MessageFields)
 	if err := processLogs(extractor, batcher); err != nil {
@@ -532,62 +586,15 @@ func runCommand(cmd *cobra.Command, args []string) error {
 }
 
 func main() {
-	rootCmd := &cobra.Command{
-		Use:   "otel-logger",
-		Short: "Send logs from stdin to OpenTelemetry collector",
-		Long: `otel-logger reads logs from stdin and sends them to an OpenTelemetry collector.
-	It can handle JSON logs as well as partial JSON with prefixes like timestamps.
-	Field mappings are configurable to support different logging frameworks.
+	var config Config
+	arg.MustParse(&config)
 
-	Examples:
-	  # Send JSON logs via gRPC (uses default field mappings)
-	  cat app.log | otel-logger --endpoint localhost:4317 --protocol grpc
-
-	  # Send logs via HTTP with custom service name
-	  tail -f app.log | otel-logger --endpoint http://localhost:4318 --protocol http --service-name myapp
-
-	  # Handle logs with timestamp prefix
-	  cat app.log | otel-logger --endpoint localhost:4317 --json-prefix "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z\\s*"
-
-	  # Logstash/ELK format with custom field mappings
-	  cat logstash.log | otel-logger --endpoint localhost:4317 \
-	    --timestamp-fields "@timestamp" --level-fields "level" --message-fields "message"
-
-	  # Custom application format with multiple field options
-	  cat custom.log | otel-logger --endpoint localhost:4317 \
-	    --timestamp-fields "created_at,event_time" \
-	    --level-fields "severity,priority" \
-	    --message-fields "description,content"
-
-	  # Winston.js format
-	  cat winston.log | otel-logger --endpoint localhost:4317 \
-	    --timestamp-fields "timestamp" --level-fields "level" --message-fields "message"
-
-	  # Batch logs for better performance
-	  cat app.log | otel-logger --endpoint localhost:4317 --batch-size 100 --flush-interval 5s
-
-	Field Mapping Defaults:
-	  Timestamps: timestamp, ts, time, @timestamp
-	  Levels:     level, lvl, severity, priority
-	  Messages:   message, msg, text, content`,
-		RunE: runCommand,
+	if config.ShowVersion {
+		fmt.Println(config.Version())
+		return
 	}
 
-	rootCmd.Flags().StringVarP(&endpoint, "endpoint", "e", "localhost:4317", "OpenTelemetry collector endpoint")
-	rootCmd.Flags().StringVarP(&protocol, "protocol", "p", "grpc", "Protocol to use (grpc or http)")
-	rootCmd.Flags().StringVar(&serviceName, "service-name", "otel-logger", "Service name for telemetry")
-	rootCmd.Flags().StringVar(&serviceVersion, "service-version", "1.0.0", "Service version for telemetry")
-	rootCmd.Flags().BoolVar(&insecure, "insecure", false, "Use insecure connection")
-	rootCmd.Flags().DurationVar(&timeout, "timeout", 10*time.Second, "Request timeout")
-	rootCmd.Flags().StringArrayVar(&headers, "header", []string{}, "Additional headers (key=value)")
-	rootCmd.Flags().StringVar(&jsonPrefix, "json-prefix", "", "Regex pattern to extract JSON from prefixed logs")
-	rootCmd.Flags().IntVar(&batchSize, "batch-size", 50, "Number of log entries to batch before sending")
-	rootCmd.Flags().DurationVar(&flushInterval, "flush-interval", 5*time.Second, "Interval to flush batched logs")
-	rootCmd.Flags().StringArrayVar(&timestampFields, "timestamp-fields", []string{}, "JSON field names for timestamps (default: timestamp,ts,time,@timestamp)")
-	rootCmd.Flags().StringArrayVar(&levelFields, "level-fields", []string{}, "JSON field names for log levels (default: level,lvl,severity,priority)")
-	rootCmd.Flags().StringArrayVar(&messageFields, "message-fields", []string{}, "JSON field names for log messages (default: message,msg,text,content)")
-
-	if err := rootCmd.Execute(); err != nil {
+	if err := runCommand(&config); err != nil {
 		log.Fatal(err)
 	}
 }
