@@ -2,29 +2,23 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
+	stdlog "log"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/alexflint/go-arg"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	grpcinsecure "google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/proto"
-
-	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
-	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
-	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
-	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
+	"go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/log/global"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
 var (
@@ -115,14 +109,9 @@ type JSONExtractor struct {
 	fieldMappings *FieldMappings
 }
 
-// LogBatcher batches log entries for efficient sending
-type LogBatcher struct {
-	entries       []*LogEntry
-	maxSize       int
-	flushInterval time.Duration
-	flushFunc     func([]*LogEntry) error
-	ticker        *time.Ticker
-	done          chan struct{}
+// LogProcessor wraps the OpenTelemetry logger for stdin processing
+type LogProcessor struct {
+	logger log.Logger
 }
 
 func NewJSONExtractor(prefix string, fieldMappings *FieldMappings) *JSONExtractor {
@@ -251,246 +240,144 @@ func parseTimestamp(timeStr string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unable to parse timestamp: %s", timeStr)
 }
 
-func NewLogBatcher(maxSize int, flushInterval time.Duration, flushFunc func([]*LogEntry) error) *LogBatcher {
-	batcher := &LogBatcher{
-		entries:       make([]*LogEntry, 0, maxSize),
-		maxSize:       maxSize,
-		flushInterval: flushInterval,
-		flushFunc:     flushFunc,
-		done:          make(chan struct{}),
-	}
-
-	if flushInterval > 0 {
-		batcher.ticker = time.NewTicker(flushInterval)
-		go batcher.flushLoop()
-	}
-
-	return batcher
+func NewLogProcessor(logger log.Logger) *LogProcessor {
+	return &LogProcessor{logger: logger}
 }
 
-func (b *LogBatcher) Add(entry *LogEntry) error {
-	b.entries = append(b.entries, entry)
-	if len(b.entries) >= b.maxSize {
-		return b.flush()
-	}
-	return nil
-}
+func (p *LogProcessor) ProcessLogEntry(ctx context.Context, entry *LogEntry) {
+	// Create log record using OTEL API
+	var record log.Record
+	record.SetTimestamp(entry.Timestamp)
+	record.SetBody(log.StringValue(entry.Message))
+	record.SetSeverityText(entry.Level)
+	record.SetSeverity(logLevelToSeverity(entry.Level))
 
-func (b *LogBatcher) Flush() error {
-	return b.flush()
-}
-
-func (b *LogBatcher) flush() error {
-	if len(b.entries) == 0 {
-		return nil
+	// Add attributes from parsed fields
+	attrs := make([]log.KeyValue, 0, len(entry.Fields)+2)
+	for key, value := range entry.Fields {
+		attrs = append(attrs, log.String(key, fmt.Sprintf("%v", value)))
 	}
 
-	entries := make([]*LogEntry, len(b.entries))
-	copy(entries, b.entries)
-	b.entries = b.entries[:0]
+	// Add standard attributes
+	attrs = append(attrs,
+		log.String("log.level", entry.Level),
+		log.String("raw_log", entry.Raw),
+	)
 
-	return b.flushFunc(entries)
+	record.AddAttributes(attrs...)
+
+	// Emit the record through OTEL SDK
+	p.logger.Emit(ctx, record)
 }
 
-func (b *LogBatcher) flushLoop() {
-	for {
-		select {
-		case <-b.ticker.C:
-			if err := b.flush(); err != nil {
-				fmt.Fprintf(os.Stderr, "Error flushing logs: %v\n", err)
-			}
-		case <-b.done:
-			return
-		}
-	}
-}
-
-func (b *LogBatcher) Close() error {
-	if b.ticker != nil {
-		b.ticker.Stop()
-		close(b.done)
-	}
-	return b.flush()
-}
-
-func logLevelToSeverity(level string) logspb.SeverityNumber {
+func logLevelToSeverity(level string) log.Severity {
 	switch strings.ToLower(level) {
 	case "trace":
-		return logspb.SeverityNumber_SEVERITY_NUMBER_TRACE
+		return log.SeverityTrace1
 	case "debug":
-		return logspb.SeverityNumber_SEVERITY_NUMBER_DEBUG
+		return log.SeverityDebug1
 	case "info":
-		return logspb.SeverityNumber_SEVERITY_NUMBER_INFO
+		return log.SeverityInfo1
 	case "warn", "warning":
-		return logspb.SeverityNumber_SEVERITY_NUMBER_WARN
+		return log.SeverityWarn1
 	case "error":
-		return logspb.SeverityNumber_SEVERITY_NUMBER_ERROR
+		return log.SeverityError1
 	case "fatal":
-		return logspb.SeverityNumber_SEVERITY_NUMBER_FATAL
+		return log.SeverityFatal1
 	default:
-		return logspb.SeverityNumber_SEVERITY_NUMBER_INFO
+		return log.SeverityInfo1
 	}
 }
 
-func valueToAnyValue(value interface{}) *commonpb.AnyValue {
-	switch v := value.(type) {
-	case string:
-		return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v}}
-	case bool:
-		return &commonpb.AnyValue{Value: &commonpb.AnyValue_BoolValue{BoolValue: v}}
-	case int:
-		return &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: int64(v)}}
-	case int64:
-		return &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: v}}
-	case float64:
-		return &commonpb.AnyValue{Value: &commonpb.AnyValue_DoubleValue{DoubleValue: v}}
-	default:
-		return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: fmt.Sprintf("%v", v)}}
-	}
-}
-
-func createExportRequest(entries []*LogEntry, config *Config) *collogspb.ExportLogsServiceRequest {
-	// Create resource
-	resource := &resourcepb.Resource{
-		Attributes: []*commonpb.KeyValue{
-			{
-				Key:   "service.name",
-				Value: valueToAnyValue(config.ServiceName),
-			},
-			{
-				Key:   "service.version",
-				Value: valueToAnyValue(config.ServiceVersion),
-			},
-		},
-	}
-
-	var logRecords []*logspb.LogRecord
-	for _, entry := range entries {
-		// Create attributes from fields
-		var attributes []*commonpb.KeyValue
-		for key, value := range entry.Fields {
-			attributes = append(attributes, &commonpb.KeyValue{
-				Key:   key,
-				Value: valueToAnyValue(value),
-			})
-		}
-
-		// Add standard attributes
-		attributes = append(attributes, &commonpb.KeyValue{
-			Key:   "log.level",
-			Value: valueToAnyValue(entry.Level),
-		})
-
-		logRecord := &logspb.LogRecord{
-			TimeUnixNano:   uint64(entry.Timestamp.UnixNano()),
-			SeverityNumber: logLevelToSeverity(entry.Level),
-			SeverityText:   entry.Level,
-			Body:           valueToAnyValue(entry.Message),
-			Attributes:     attributes,
-		}
-
-		logRecords = append(logRecords, logRecord)
-	}
-
-	scopeLogs := &logspb.ScopeLogs{
-		Scope: &commonpb.InstrumentationScope{
-			Name:    "otel-logger",
-			Version: "1.0.0",
-		},
-		LogRecords: logRecords,
-	}
-
-	resourceLogs := &logspb.ResourceLogs{
-		Resource:  resource,
-		ScopeLogs: []*logspb.ScopeLogs{scopeLogs},
-	}
-
-	return &collogspb.ExportLogsServiceRequest{
-		ResourceLogs: []*logspb.ResourceLogs{resourceLogs},
-	}
-}
-
-func sendLogsHTTP(entries []*LogEntry, config *Config) error {
-	req := createExportRequest(entries, config)
-	data, err := proto.Marshal(req)
+func createLoggerProvider(ctx context.Context, config *Config) (*sdklog.LoggerProvider, error) {
+	// Create resource with service information
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName(config.ServiceName),
+			semconv.ServiceVersion(config.ServiceVersion),
+		),
+	)
 	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
-	url := config.Endpoint
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+	// Create exporter based on protocol
+	var exporter sdklog.Exporter
+	switch strings.ToLower(config.Protocol) {
+	case "grpc":
+		opts := []otlploggrpc.Option{
+			otlploggrpc.WithEndpoint(config.Endpoint),
+			otlploggrpc.WithTimeout(config.Timeout),
+		}
+
 		if config.Insecure {
-			url = "http://" + url
-		} else {
-			url = "https://" + url
+			opts = append(opts, otlploggrpc.WithInsecure())
 		}
-	}
-	if !strings.HasSuffix(url, "/v1/logs") {
-		url = strings.TrimSuffix(url, "/") + "/v1/logs"
-	}
 
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/x-protobuf")
-	for _, header := range config.Headers {
-		parts := strings.SplitN(header, "=", 2)
-		if len(parts) == 2 {
-			httpReq.Header.Set(parts[0], parts[1])
+		// Add headers if provided
+		if len(config.Headers) > 0 {
+			headerMap := make(map[string]string)
+			for _, header := range config.Headers {
+				parts := strings.SplitN(header, "=", 2)
+				if len(parts) == 2 {
+					headerMap[parts[0]] = parts[1]
+				}
+			}
+			opts = append(opts, otlploggrpc.WithHeaders(headerMap))
 		}
-	}
 
-	client := &http.Client{
-		Timeout: config.Timeout,
-	}
-	if config.Insecure {
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		exporter, err = otlploggrpc.New(ctx, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gRPC exporter: %w", err)
 		}
+
+	case "http":
+		opts := []otlploghttp.Option{
+			otlploghttp.WithEndpoint(config.Endpoint),
+			otlploghttp.WithTimeout(config.Timeout),
+		}
+
+		if config.Insecure {
+			opts = append(opts, otlploghttp.WithInsecure())
+		}
+
+		// Add headers if provided
+		if len(config.Headers) > 0 {
+			headerMap := make(map[string]string)
+			for _, header := range config.Headers {
+				parts := strings.SplitN(header, "=", 2)
+				if len(parts) == 2 {
+					headerMap[parts[0]] = parts[1]
+				}
+			}
+			opts = append(opts, otlploghttp.WithHeaders(headerMap))
+		}
+
+		exporter, err = otlploghttp.New(ctx, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create HTTP exporter: %w", err)
+		}
+
+	default:
+		return nil, fmt.Errorf("unsupported protocol: %s (supported: grpc, http)", config.Protocol)
 	}
 
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
+	// Create processor with batching configuration
+	processorOpts := []sdklog.BatchProcessorOption{
+		sdklog.WithExportMaxBatchSize(config.BatchSize),
+		sdklog.WithExportInterval(config.FlushInterval),
+		sdklog.WithExportTimeout(config.Timeout),
 	}
 
-	return nil
-}
+	processor := sdklog.NewBatchProcessor(exporter, processorOpts...)
 
-func sendLogsGRPC(entries []*LogEntry, config *Config) error {
-	var creds credentials.TransportCredentials
-	if config.Insecure {
-		creds = grpcinsecure.NewCredentials()
-	} else {
-		creds = credentials.NewTLS(&tls.Config{})
-	}
+	// Create logger provider
+	provider := sdklog.NewLoggerProvider(
+		sdklog.WithResource(res),
+		sdklog.WithProcessor(processor),
+	)
 
-	conn, err := grpc.Dial(config.Endpoint, grpc.WithTransportCredentials(creds))
-	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
-	}
-	defer conn.Close()
-
-	client := collogspb.NewLogsServiceClient(conn)
-	req := createExportRequest(entries, config)
-
-	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
-	defer cancel()
-
-	_, err = client.Export(ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to export logs: %w", err)
-	}
-
-	return nil
+	return provider, nil
 }
 
 func getDefaultFieldMappings() *FieldMappings {
@@ -501,7 +388,7 @@ func getDefaultFieldMappings() *FieldMappings {
 	}
 }
 
-func processLogs(extractor *JSONExtractor, batcher *LogBatcher) error {
+func processLogs(ctx context.Context, extractor *JSONExtractor, processor *LogProcessor) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for scanner.Scan() {
@@ -516,9 +403,7 @@ func processLogs(extractor *JSONExtractor, batcher *LogBatcher) error {
 			continue
 		}
 
-		if err := batcher.Add(entry); err != nil {
-			fmt.Fprintf(os.Stderr, "Error adding log entry to batch: %v\n", err)
-		}
+		processor.ProcessLogEntry(ctx, entry)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -529,24 +414,25 @@ func processLogs(extractor *JSONExtractor, batcher *LogBatcher) error {
 }
 
 func runCommand(config *Config) error {
-	// Create flush function based on protocol
-	var flushFunc func([]*LogEntry) error
-	switch strings.ToLower(config.Protocol) {
-	case "grpc":
-		flushFunc = func(entries []*LogEntry) error {
-			return sendLogsGRPC(entries, config)
-		}
-	case "http":
-		flushFunc = func(entries []*LogEntry) error {
-			return sendLogsHTTP(entries, config)
-		}
-	default:
-		return fmt.Errorf("unsupported protocol: %s (supported: grpc, http)", config.Protocol)
-	}
+	ctx := context.Background()
 
-	// Create batcher
-	batcher := NewLogBatcher(config.BatchSize, config.FlushInterval, flushFunc)
-	defer batcher.Close()
+	// Create logger provider using OTEL SDK
+	provider, err := createLoggerProvider(ctx, config)
+	if err != nil {
+		return fmt.Errorf("failed to create logger provider: %w", err)
+	}
+	defer func() {
+		if err := provider.Shutdown(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Error shutting down logger provider: %v\n", err)
+		}
+	}()
+
+	// Set global logger provider
+	global.SetLoggerProvider(provider)
+
+	// Create logger and processor
+	logger := provider.Logger("otel-logger")
+	processor := NewLogProcessor(logger)
 
 	// Create field mappings
 	var fieldMappings *FieldMappings
@@ -577,11 +463,16 @@ func runCommand(config *Config) error {
 	fmt.Fprintf(os.Stderr, "Reading logs from stdin and sending to %s://%s (batch_size=%d)\n", config.Protocol, config.Endpoint, config.BatchSize)
 	fmt.Fprintf(os.Stderr, "Field mappings - Timestamp: %v, Level: %v, Message: %v\n",
 		fieldMappings.TimestampFields, fieldMappings.LevelFields, fieldMappings.MessageFields)
-	if err := processLogs(extractor, batcher); err != nil {
+	if err := processLogs(ctx, extractor, processor); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Finished reading logs, flushing remaining entries...\n")
+	// Force flush before exit
+	if err := provider.ForceFlush(ctx); err != nil {
+		return fmt.Errorf("failed to flush logs: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Finished processing logs and flushed to collector\n")
 	return nil
 }
 
@@ -595,6 +486,6 @@ func main() {
 	}
 
 	if err := runCommand(&config); err != nil {
-		log.Fatal(err)
+		stdlog.Fatal(err)
 	}
 }

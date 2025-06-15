@@ -1,19 +1,21 @@
 # OpenTelemetry Log Forwarder
 
-A lightweight CLI tool that reads logs from stdin and forwards them to an OpenTelemetry collector. It intelligently parses JSON logs, handles various timestamp formats, and can extract JSON from logs with prefixes (like timestamps or log levels).
+A lightweight CLI tool that reads logs from stdin and forwards them to an OpenTelemetry collector using the **official OpenTelemetry Go SDK**. It intelligently parses JSON logs, handles various timestamp formats, and can extract JSON from logs with prefixes (like timestamps or log levels).
 
 ## Features
 
+- **Official OpenTelemetry SDK**: Built with the official OpenTelemetry Go SDK (beta logging support)
 - **Lightweight CLI**: Built with `go-arg` for clean, fast argument parsing
-- **Multiple protocols**: Supports both gRPC and HTTP/HTTPS protocols
+- **Multiple protocols**: Supports both gRPC and HTTP/HTTPS protocols via official OTLP exporters
 - **JSON parsing**: Automatically detects and parses JSON log entries
 - **Configurable field mappings**: Support for different logging frameworks (Logstash, Winston, etc.)
 - **Prefix handling**: Extracts JSON from logs with timestamps or other prefixes
 - **Flexible timestamp parsing**: Supports multiple timestamp formats (RFC3339, Unix timestamps, etc.)
-- **Batching**: Efficiently batches log entries for better performance
+- **Official batching**: Uses OpenTelemetry SDK's built-in batching for optimal performance
 - **Custom headers**: Supports additional headers for authentication
 - **Insecure connections**: Optional support for insecure connections (useful for development)
 - **Service metadata**: Configurable service name and version for telemetry
+- **Standards compliance**: Full OTLP specification compliance via official SDK
 
 ## Installation
 
@@ -324,12 +326,15 @@ make bench
 
 ## Technical Details
 
+- **OpenTelemetry SDK**: Uses the official OpenTelemetry Go SDK (v1.36.0+ with beta logging support)
+- **OTLP Exporters**: Official OTLP gRPC and HTTP exporters for standards compliance
 - **CLI Framework**: Uses `go-arg` for clean, lightweight argument parsing
-- **Protocol Support**: Native gRPC and HTTP/HTTPS with protobuf serialization
-- **Performance**: Efficient batching and connection pooling (see benchmarks with `make bench`)
-- **Memory**: Low memory footprint with configurable batch sizes
+- **Protocol Support**: Native gRPC and HTTP/HTTPS with protobuf serialization via official exporters
+- **Performance**: Official SDK batching with configurable batch sizes and flush intervals
+- **Memory**: Low memory footprint with SDK-optimized resource management
 - **Testing**: Comprehensive Go test suite with unit, integration, and benchmark tests
 - **Error Handling**: Graceful handling of malformed JSON and connection issues
+- **Standards Compliance**: Full OTLP specification compliance via official SDK components
 
 ## Contributing
 

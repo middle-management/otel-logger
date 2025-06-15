@@ -310,64 +310,6 @@ func TestLogLevelToSeverity(t *testing.T) {
 	}
 }
 
-func TestValueToAnyValue(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    interface{}
-		expected string // we'll check the type, not exact protobuf content
-	}{
-		{"string", "test", "string"},
-		{"bool true", true, "bool"},
-		{"bool false", false, "bool"},
-		{"int", 42, "int"},
-		{"int64", int64(42), "int64"},
-		{"float64", 3.14, "float64"},
-		{"nil", nil, "string"}, // converts to string representation
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := valueToAnyValue(tt.input)
-			if result == nil {
-				t.Errorf("valueToAnyValue(%v) returned nil", tt.input)
-			}
-			// We just check that it doesn't panic and returns something
-			// Detailed protobuf testing would be more complex
-		})
-	}
-}
-
-func TestNewLogBatcher(t *testing.T) {
-	callCount := 0
-	flushFunc := func(entries []*LogEntry) error {
-		callCount++
-		return nil
-	}
-
-	batcher := NewLogBatcher(3, 0, flushFunc) // no flush interval for test
-	defer batcher.Close()
-
-	if batcher.maxSize != 3 {
-		t.Errorf("Expected maxSize 3, got %d", batcher.maxSize)
-	}
-
-	// Add entries that should trigger flush
-	for i := 0; i < 3; i++ {
-		entry := &LogEntry{
-			Message: "test",
-			Level:   "info",
-		}
-		err := batcher.Add(entry)
-		if err != nil {
-			t.Errorf("Unexpected error adding entry: %v", err)
-		}
-	}
-
-	if callCount != 1 {
-		t.Errorf("Expected flush to be called once, called %d times", callCount)
-	}
-}
-
 func TestConfig_Version(t *testing.T) {
 	// Test the version string formatting
 	version = "1.2.3"
