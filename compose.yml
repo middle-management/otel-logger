@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  collector:
+    image: grafana/otel-lgtm
+    init: true
+    ports:
+      - 3000:3000
+      - 4317:4317
+      - 4318:4318
+    environment:
+      ${OTEL_EXPORTER_OTLP_ENDPOINT:+OTEL_EXPORTER_OTLP_ENDPOINT}: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      ${OTEL_EXPORTER_OTLP_HEADERS:+OTEL_EXPORTER_OTLP_HEADERS}: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      ENABLE_LOGS_OTELCOL: ${ENABLE_LOGS_OTELCOL:-"false"}
