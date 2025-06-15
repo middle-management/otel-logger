@@ -1,0 +1,12 @@
+2024-01-15T10:30:45.123Z {"level": "info", "message": "Service initialized", "service": "api-gateway", "version": "1.2.3"}
+2024-01-15 10:30:46 {"lvl": "debug", "msg": "Configuration loaded", "config_file": "/app/config.yaml", "settings_count": 25}
+[2024-01-15T10:30:47.456Z] {"level": "warn", "message": "Deprecated API endpoint accessed", "endpoint": "/api/v1/users", "client_ip": "10.0.1.50"}
+2024-01-15T10:30:48+00:00 {"level": "error", "message": "Database query failed", "query": "SELECT * FROM orders", "error": "timeout after 30s", "duration_ms": 30000}
+Jan 15 10:30:49 {"ts": "2024-01-15T10:30:49.789Z", "severity": "info", "msg": "HTTP request processed", "method": "POST", "path": "/api/orders", "status": 201, "response_time": 150}
+2024-01-15T10:30:50.000Z INFO {"level": "info", "message": "Cache warming completed", "cache_type": "redis", "keys_loaded": 50000, "time_taken_ms": 2500}
+[10:30:51.234] {"level": "trace", "message": "Function execution", "function": "validatePayment", "execution_time_us": 1250, "memory_allocated_kb": 64}
+2024/01/15 10:30:52 {"lvl": "debug", "msg": "WebSocket connection established", "connection_id": "ws-conn-789", "client_version": "2.1.0"}
+15/01/2024 10:30:53.567 {"level": "warn", "message": "SSL certificate expires soon", "cert_domain": "api.example.com", "expires_in_days": 7}
+2024-01-15T10:30:54Z [worker-3] {"level": "info", "message": "Background task completed", "task": "generate_reports", "records_processed": 12500, "success": true}
+Mon Jan 15 10:30:55 2024 {"level": "error", "message": "External API call failed", "api": "payment-service", "endpoint": "https://api.payments.com/charge", "http_status": 503}
+2024-01-15T10:30:56.890+0000 {"ts": "2024-01-15T10:30:56.890Z", "level": "fatal", "msg": "Out of memory error", "available_memory_mb": 128, "required_memory_mb": 512, "process_id": 1234}

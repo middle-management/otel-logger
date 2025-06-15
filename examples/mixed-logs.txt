@@ -1,0 +1,21 @@
+2024-01-15T10:30:45Z INFO Starting application server on port 8080
+{"timestamp": "2024-01-15T10:30:46Z", "level": "info", "message": "Database connection pool initialized", "pool_size": 10}
+[ERROR] 2024-01-15 10:30:47 - Failed to load configuration file: config.yaml not found
+2024-01-15T10:30:48.123Z {"level": "debug", "msg": "User session created", "session_id": "sess_abc123", "user_id": 42}
+WARN: Memory usage is high (87.5%)
+{"malformed": "json", "missing_quote: "should_fail", "level": "error"}
+2024-01-15T10:30:49.456Z [worker-1] Processing order #12345
+{"ts": "2024-01-15T10:30:50Z", "lvl": "info", "message": "Payment processed successfully", "amount": 299.99, "currency": "USD", "transaction_id": "txn_xyz789"}
+Application crashed with exit code 1
+2024-01-15 10:30:51 DEBUG: Cache hit ratio: 0.85 (850/1000 requests)
+[2024-01-15T10:30:52.789Z] {"level": "warn", "message": "Rate limit exceeded", "client_ip": "192.168.1.100", "requests_per_minute": 1200, "limit": 1000}
+Simple log message without timestamp or JSON
+{"incomplete": "json structure"
+2024-01-15T10:30:53+00:00 FATAL Database connection lost, attempting reconnect...
+{"timestamp": "2024-01-15T10:30:54Z", "severity": "error", "msg": "HTTP 500 internal server error", "request_path": "/api/users/profile", "error_details": {"code": "DB_CONNECTION_FAILED", "retries": 3}}
+[INFO] User login attempt from unknown IP: 203.0.113.1
+2024-01-15 10:30:55.123 {"level": "trace", "message": "Function call", "func": "calculateDiscount", "params": {"customer_type": "premium", "order_total": 500.00}, "result": 50.00}
+Exception in thread "main" java.lang.NullPointerException at com.example.App.main(App.java:42)
+{"ts": 1705315856, "level": "info", "message": "Scheduled backup completed", "backup_size_mb": 2048, "duration_minutes": 15, "destination": "s3://backups/daily/"}
+ 	Whitespace and tab characters in log entry
+2024-01-15T10:30:57.999Z {"level": "debug", "msg": "API response", "endpoint": "/health", "status": 200, "response_body": "{\"status\":\"healthy\",\"uptime\":3600}"}

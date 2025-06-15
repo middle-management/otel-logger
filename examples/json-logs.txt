@@ -1,0 +1,12 @@
+{"timestamp": "2024-01-15T10:30:45Z", "level": "info", "message": "Application started successfully", "service": "web-server", "port": 8080}
+{"ts": "2024-01-15T10:30:46.123Z", "lvl": "debug", "msg": "Database connection established", "db_host": "localhost", "db_port": 5432}
+{"time": "2024-01-15T10:30:47.456Z", "level": "warn", "message": "High memory usage detected", "memory_usage": "85%", "threshold": "80%"}
+{"timestamp": "2024-01-15T10:30:48Z", "level": "error", "message": "Failed to process request", "error": "connection timeout", "request_id": "req-123", "user_id": "user-456"}
+{"ts": "2024-01-15T10:30:49.789Z", "level": "info", "msg": "User authentication successful", "user_id": "user-789", "ip_address": "192.168.1.100", "user_agent": "Mozilla/5.0"}
+{"timestamp": "2024-01-15T10:30:50Z", "severity": "fatal", "message": "Critical system failure", "component": "database", "error_code": 500}
+{"time": "2024-01-15T10:30:51.234Z", "level": "trace", "message": "Function entry", "function": "processOrder", "args": {"order_id": "ord-999", "amount": 99.99}}
+{"ts": "2024-01-15T10:30:52Z", "lvl": "info", "msg": "Cache hit", "cache_key": "user:123", "ttl": 3600, "hit_rate": 0.85}
+{"timestamp": 1705315853, "level": "debug", "message": "Performance metrics", "response_time_ms": 245, "cpu_usage": 0.45, "memory_mb": 512}
+{"time": "2024-01-15T10:30:54.567Z", "level": "warn", "message": "Rate limit approaching", "current_requests": 950, "limit": 1000, "window": "1m"}
+{"ts": "2024-01-15T10:30:55Z", "level": "info", "msg": "Background job completed", "job_type": "email_batch", "processed": 1500, "duration_seconds": 45}
+{"timestamp": "2024-01-15T10:30:56.890Z", "level": "error", "message": "Payment processing failed", "payment_id": "pay-abc123", "amount": 149.99, "currency": "USD", "gateway": "stripe"}
