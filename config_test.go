@@ -24,26 +24,6 @@ func TestConfigDefaults(t *testing.T) {
 	}
 
 	// Test default values
-	if config.Endpoint != "localhost:4317" {
-		t.Errorf("Expected default endpoint 'localhost:4317', got '%s'", config.Endpoint)
-	}
-
-	if config.Protocol != "grpc" {
-		t.Errorf("Expected default protocol 'grpc', got '%s'", config.Protocol)
-	}
-
-	if config.ServiceName != "otel-logger" {
-		t.Errorf("Expected default service name 'otel-logger', got '%s'", config.ServiceName)
-	}
-
-	if config.ServiceVersion != "1.0.0" {
-		t.Errorf("Expected default service version '1.0.0', got '%s'", config.ServiceVersion)
-	}
-
-	if config.Insecure != false {
-		t.Errorf("Expected default insecure 'false', got '%v'", config.Insecure)
-	}
-
 	if config.Timeout != 10*time.Second {
 		t.Errorf("Expected default timeout '10s', got '%v'", config.Timeout)
 	}
@@ -59,6 +39,10 @@ func TestConfigDefaults(t *testing.T) {
 	if config.ShowVersion != false {
 		t.Errorf("Expected default show version 'false', got '%v'", config.ShowVersion)
 	}
+
+	if config.JSONPrefix != "" {
+		t.Errorf("Expected default json prefix '', got '%s'", config.JSONPrefix)
+	}
 }
 
 func TestConfigParsing(t *testing.T) {
@@ -69,69 +53,15 @@ func TestConfigParsing(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name: "basic flags",
-			args: []string{
-				"--endpoint", "example.com:4317",
-				"--protocol", "http",
-				"--service-name", "test-service",
-			},
-			expected: Config{
-				Endpoint:       "example.com:4317",
-				Protocol:       "http",
-				ServiceName:    "test-service",
-				ServiceVersion: "1.0.0",          // default
-				Timeout:        10 * time.Second, // default
-				BatchSize:      50,               // default
-				FlushInterval:  5 * time.Second,  // default
-			},
-		},
-		{
-			name: "short flags",
-			args: []string{
-				"-e", "short.example.com:4317",
-				"-p", "grpc",
-			},
-			expected: Config{
-				Endpoint:       "short.example.com:4317",
-				Protocol:       "grpc",
-				ServiceName:    "otel-logger",    // default
-				ServiceVersion: "1.0.0",          // default
-				Timeout:        10 * time.Second, // default
-				BatchSize:      50,               // default
-				FlushInterval:  5 * time.Second,  // default
-			},
-		},
-		{
 			name: "duration parsing",
 			args: []string{
 				"--timeout", "30s",
 				"--flush-interval", "2m",
 			},
 			expected: Config{
-				Endpoint:       "localhost:4317", // default
-				Protocol:       "grpc",           // default
-				ServiceName:    "otel-logger",    // default
-				ServiceVersion: "1.0.0",          // default
-				Timeout:        30 * time.Second,
-				BatchSize:      50, // default
-				FlushInterval:  2 * time.Minute,
-			},
-		},
-		{
-			name: "boolean flags",
-			args: []string{
-				"--insecure",
-			},
-			expected: Config{
-				Endpoint:       "localhost:4317", // default
-				Protocol:       "grpc",           // default
-				ServiceName:    "otel-logger",    // default
-				ServiceVersion: "1.0.0",          // default
-				Insecure:       true,
-				ShowVersion:    false,            // default
-				Timeout:        10 * time.Second, // default
-				BatchSize:      50,               // default
-				FlushInterval:  5 * time.Second,  // default
+				Timeout:       30 * time.Second,
+				BatchSize:     50, // default
+				FlushInterval: 2 * time.Minute,
 			},
 		},
 		{
@@ -150,10 +80,6 @@ func TestConfigParsing(t *testing.T) {
 				"--message-fields", "description",
 			},
 			expected: Config{
-				Endpoint:        "localhost:4317", // default
-				Protocol:        "grpc",           // default
-				ServiceName:     "otel-logger",    // default
-				ServiceVersion:  "1.0.0",          // default
 				TimestampFields: []string{"created_at", "event_time"},
 				LevelFields:     []string{"severity"},
 				MessageFields:   []string{"description"},
@@ -163,36 +89,15 @@ func TestConfigParsing(t *testing.T) {
 			},
 		},
 		{
-			name: "headers",
-			args: []string{
-				"--header", "Authorization=Bearer token123",
-				"--header", "X-API-Key=secret456",
-			},
-			expected: Config{
-				Endpoint:       "localhost:4317", // default
-				Protocol:       "grpc",           // default
-				ServiceName:    "otel-logger",    // default
-				ServiceVersion: "1.0.0",          // default
-				Headers:        []string{"Authorization=Bearer token123", "X-API-Key=secret456"},
-				Timeout:        10 * time.Second, // default
-				BatchSize:      50,               // default
-				FlushInterval:  5 * time.Second,  // default
-			},
-		},
-		{
 			name: "json prefix regex",
 			args: []string{
 				"--json-prefix", `^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z\\s*`,
 			},
 			expected: Config{
-				Endpoint:       "localhost:4317", // default
-				Protocol:       "grpc",           // default
-				ServiceName:    "otel-logger",    // default
-				ServiceVersion: "1.0.0",          // default
-				JSONPrefix:     `^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z\\s*`,
-				Timeout:        10 * time.Second, // default
-				BatchSize:      50,               // default
-				FlushInterval:  5 * time.Second,  // default
+				JSONPrefix:    `^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z\\s*`,
+				Timeout:       10 * time.Second, // default
+				BatchSize:     50,               // default
+				FlushInterval: 5 * time.Second,  // default
 			},
 		},
 		{
@@ -208,13 +113,9 @@ func TestConfigParsing(t *testing.T) {
 				"--batch-size", "-10",
 			},
 			expected: Config{
-				Endpoint:       "localhost:4317", // default
-				Protocol:       "grpc",           // default
-				ServiceName:    "otel-logger",    // default
-				ServiceVersion: "1.0.0",          // default
-				BatchSize:      -10,              // parsed as-is, validation happens elsewhere
-				Timeout:        10 * time.Second, // default
-				FlushInterval:  5 * time.Second,  // default
+				BatchSize:     -10,              // parsed as-is, validation happens elsewhere
+				Timeout:       10 * time.Second, // default
+				FlushInterval: 5 * time.Second,  // default
 			},
 		},
 	}
@@ -243,21 +144,6 @@ func TestConfigParsing(t *testing.T) {
 			}
 
 			// Compare relevant fields
-			if config.Endpoint != tt.expected.Endpoint {
-				t.Errorf("Endpoint: expected %s, got %s", tt.expected.Endpoint, config.Endpoint)
-			}
-			if config.Protocol != tt.expected.Protocol {
-				t.Errorf("Protocol: expected %s, got %s", tt.expected.Protocol, config.Protocol)
-			}
-			if config.ServiceName != tt.expected.ServiceName {
-				t.Errorf("ServiceName: expected %s, got %s", tt.expected.ServiceName, config.ServiceName)
-			}
-			if config.ServiceVersion != tt.expected.ServiceVersion {
-				t.Errorf("ServiceVersion: expected %s, got %s", tt.expected.ServiceVersion, config.ServiceVersion)
-			}
-			if config.Insecure != tt.expected.Insecure {
-				t.Errorf("Insecure: expected %v, got %v", tt.expected.Insecure, config.Insecure)
-			}
 			if config.ShowVersion != tt.expected.ShowVersion {
 				t.Errorf("ShowVersion: expected %v, got %v", tt.expected.ShowVersion, config.ShowVersion)
 			}
@@ -269,9 +155,6 @@ func TestConfigParsing(t *testing.T) {
 			}
 			if config.FlushInterval != tt.expected.FlushInterval {
 				t.Errorf("FlushInterval: expected %v, got %v", tt.expected.FlushInterval, config.FlushInterval)
-			}
-			if !reflect.DeepEqual(config.Headers, tt.expected.Headers) {
-				t.Errorf("Headers: expected %v, got %v", tt.expected.Headers, config.Headers)
 			}
 			if !reflect.DeepEqual(config.TimestampFields, tt.expected.TimestampFields) {
 				t.Errorf("TimestampFields: expected %v, got %v", tt.expected.TimestampFields, config.TimestampFields)
@@ -297,41 +180,22 @@ func TestConfigValidation(t *testing.T) {
 		errString string
 	}{
 		{
-			name: "valid grpc config",
+			name: "valid config",
 			config: Config{
-				Endpoint:  "localhost:4317",
-				Protocol:  "grpc",
-				BatchSize: 50,
+				BatchSize:     50,
+				Timeout:       10 * time.Second,
+				FlushInterval: 5 * time.Second,
 			},
 			wantErr: false,
 		},
 		{
-			name: "valid http config",
+			name: "negative batch size",
 			config: Config{
-				Endpoint:  "http://localhost:4318",
-				Protocol:  "http",
-				BatchSize: 100,
+				BatchSize:     -10,
+				Timeout:       10 * time.Second,
+				FlushInterval: 5 * time.Second,
 			},
-			wantErr: false,
-		},
-		{
-			name: "invalid protocol",
-			config: Config{
-				Endpoint:  "localhost:4317",
-				Protocol:  "invalid",
-				BatchSize: 50,
-			},
-			wantErr:   true,
-			errString: "unsupported protocol",
-		},
-		{
-			name: "empty endpoint",
-			config: Config{
-				Endpoint:  "",
-				Protocol:  "grpc",
-				BatchSize: 50,
-			},
-			wantErr: false, // Empty endpoint might be handled by dial
+			wantErr: false, // Validation might happen at runtime
 		},
 	}
 
@@ -357,11 +221,17 @@ func TestConfigValidation(t *testing.T) {
 }
 
 func TestEnvironmentVariables(t *testing.T) {
-	// Test that environment variables can be used (if supported by go-arg)
-	originalEndpoint := os.Getenv("ENDPOINT")
-	defer os.Setenv("ENDPOINT", originalEndpoint)
+	// Test that OpenTelemetry environment variables can be used
+	originalEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	defer func() {
+		if originalEndpoint == "" {
+			os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+		} else {
+			os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", originalEndpoint)
+		}
+	}()
 
-	os.Setenv("ENDPOINT", "env.example.com:4317")
+	os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://env.example.com:4317")
 
 	var config Config
 	p, err := arg.NewParser(arg.Config{}, &config)
@@ -375,13 +245,9 @@ func TestEnvironmentVariables(t *testing.T) {
 		t.Fatalf("Failed to parse: %v", err)
 	}
 
-	// Note: go-arg doesn't automatically read environment variables
-	// This test documents the current behavior
-	if config.Endpoint == "env.example.com:4317" {
-		t.Log("Environment variable support detected")
-	} else {
-		t.Log("Environment variables not automatically supported (expected)")
-	}
+	// Note: Environment variables are handled by the OpenTelemetry SDK exporters
+	// The config struct itself doesn't read them directly
+	t.Log("Environment variables are handled by OpenTelemetry SDK exporters")
 }
 
 func TestConfigDescription(t *testing.T) {
@@ -410,25 +276,22 @@ func TestConfigDescription(t *testing.T) {
 func TestVersionString(t *testing.T) {
 	// Save original values
 	origVersion := version
-	origBuildTime := buildTime
 	origGitCommit := gitCommit
 
 	// Set test values
 	version = "2.1.0"
-	buildTime = "2024-01-15_12:00:00"
 	gitCommit = "def456"
 
 	defer func() {
 		// Restore original values
 		version = origVersion
-		buildTime = origBuildTime
 		gitCommit = origGitCommit
 	}()
 
 	config := Config{}
 	versionStr := config.Version()
 
-	expected := "otel-logger 2.1.0 (built: 2024-01-15_12:00:00, commit: def456)"
+	expected := "otel-logger 2.1.0 (commit: def456)"
 	if versionStr != expected {
 		t.Errorf("Expected version string '%s', got '%s'", expected, versionStr)
 	}

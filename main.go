@@ -21,7 +21,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
-	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 )
 
@@ -32,8 +31,6 @@ var (
 
 // Config holds all command-line arguments
 type Config struct {
-	ServiceName     string        `arg:"--service-name" default:"otel-logger" help:"Service name for telemetry"`
-	ServiceVersion  string        `arg:"--service-version" default:"1.0.0" help:"Service version for telemetry"`
 	Timeout         time.Duration `arg:"--timeout" default:"10s" help:"Request timeout"`
 	JSONPrefix      string        `arg:"--json-prefix" help:"Regex pattern to extract JSON from prefixed logs"`
 	BatchSize       int           `arg:"--batch-size" default:"50" help:"Number of log entries to batch before sending"`
@@ -54,41 +51,55 @@ func (Config) Description() string {
 It can handle JSON logs as well as partial JSON with prefixes like timestamps.
 Field mappings are configurable to support different logging frameworks.
 
+Configuration uses standard OpenTelemetry environment variables:
+  OTEL_EXPORTER_OTLP_ENDPOINT     - Collector endpoint (default: http://localhost:4317)
+  OTEL_EXPORTER_OTLP_PROTOCOL     - Protocol: grpc, http/protobuf, http/json (default: grpc)
+  OTEL_SERVICE_NAME               - Service name (default: otel-logger)
+  OTEL_SERVICE_VERSION            - Service version (default: 1.0.0)
+  OTEL_EXPORTER_OTLP_INSECURE     - Use insecure connection (default: false)
+  OTEL_EXPORTER_OTLP_HEADERS      - Additional headers (comma-separated key=value)
+
 Examples:
   # Read from stdin and send JSON logs via gRPC (uses default field mappings)
-  cat app.log | otel-logger --endpoint localhost:4317 --protocol grpc
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 cat app.log | otel-logger
 
   # Wrap a command and capture both stdout and stderr
-  otel-logger --endpoint localhost:4317 --service-name myapp -- ./myapp --config config.yaml
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 OTEL_SERVICE_NAME=myapp \
+    otel-logger -- ./myapp --config config.yaml
 
   # Docker entrypoint usage - capture all output from application
-  otel-logger --endpoint otel-collector:4317 --service-name webapp -- npm start
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 OTEL_SERVICE_NAME=webapp \
+    otel-logger -- npm start
 
   # Wrap a shell command with custom batching
-  otel-logger --endpoint localhost:4317 --batch-size 100 -- sh -c "while true; do echo 'test'; sleep 1; done"
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+    otel-logger --batch-size 100 -- sh -c "while true; do echo 'test'; sleep 1; done"
 
   # Send logs via HTTP with custom service name
-  tail -f app.log | otel-logger --endpoint http://localhost:4318 --protocol http --service-name myapp
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+    OTEL_SERVICE_NAME=myapp tail -f app.log | otel-logger
 
   # Handle logs with timestamp prefix
-  cat app.log | otel-logger --endpoint localhost:4317 --json-prefix "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z\\s*"
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 cat app.log | otel-logger \
+    --json-prefix "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z\\s*"
 
   # Logstash/ELK format with custom field mappings
-  cat logstash.log | otel-logger --endpoint localhost:4317 \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 cat logstash.log | otel-logger \
     --timestamp-fields "@timestamp" --level-fields "level" --message-fields "message"
 
   # Custom application format with multiple field options
-  cat custom.log | otel-logger --endpoint localhost:4317 \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 cat custom.log | otel-logger \
     --timestamp-fields "created_at,event_time" \
     --level-fields "severity,priority" \
     --message-fields "description,content"
 
   # Winston.js format
-  cat winston.log | otel-logger --endpoint localhost:4317 \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 cat winston.log | otel-logger \
     --timestamp-fields "timestamp" --level-fields "level" --message-fields "message"
 
   # Batch logs for better performance
-  cat app.log | otel-logger --endpoint localhost:4317 --batch-size 100 --flush-interval 5s
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 cat app.log | otel-logger \
+    --batch-size 100 --flush-interval 5s
 
 Field Mapping Defaults:
   Timestamps: timestamp, ts, time, @timestamp
@@ -308,17 +319,6 @@ func logLevelToSeverity(level string) log.Severity {
 }
 
 func createLoggerProvider(ctx context.Context, config *Config) (*sdklog.LoggerProvider, error) {
-	// Create resource with service information
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName(config.ServiceName),
-			semconv.ServiceVersion(config.ServiceVersion),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
-	}
-
 	protocol := "http/protobuf"
 	if proto, ok := os.LookupEnv("OTEL_EXPORTER_LOGS_PROTOCOL"); ok {
 		protocol = proto
@@ -328,6 +328,7 @@ func createLoggerProvider(ctx context.Context, config *Config) (*sdklog.LoggerPr
 
 	// Create exporter based on protocol
 	var exporter sdklog.Exporter
+	var err error
 	switch strings.ToLower(protocol) {
 	case "grpc":
 		exporter, err = otlploggrpc.New(ctx)
@@ -354,7 +355,6 @@ func createLoggerProvider(ctx context.Context, config *Config) (*sdklog.LoggerPr
 
 	// Create logger provider
 	provider := sdklog.NewLoggerProvider(
-		sdklog.WithResource(res),
 		sdklog.WithProcessor(processor),
 	)
 

@@ -107,44 +107,32 @@ func TestConfigurationIntegration(t *testing.T) {
 		valid  bool
 	}{
 		{
-			name: "valid gRPC config",
+			name: "valid config",
 			config: &Config{
-				Endpoint:       "localhost:4317",
-				Protocol:       "grpc",
-				ServiceName:    "test-service",
-				ServiceVersion: "1.0.0",
-				Insecure:       true,
-				Timeout:        10 * time.Second,
-				BatchSize:      50,
-				FlushInterval:  5 * time.Second,
+				Timeout:       10 * time.Second,
+				BatchSize:     50,
+				FlushInterval: 5 * time.Second,
 			},
 			valid: true,
 		},
 		{
-			name: "valid HTTP config",
+			name: "config with custom batching",
 			config: &Config{
-				Endpoint:       "localhost:4318",
-				Protocol:       "http",
-				ServiceName:    "test-service",
-				ServiceVersion: "1.0.0",
-				Insecure:       true,
-				Timeout:        10 * time.Second,
-				BatchSize:      100,
-				FlushInterval:  10 * time.Second,
+				Timeout:       10 * time.Second,
+				BatchSize:     100,
+				FlushInterval: 10 * time.Second,
 			},
 			valid: true,
 		},
 		{
-			name: "config with headers",
+			name: "config with field mappings",
 			config: &Config{
-				Endpoint:       "localhost:4317",
-				Protocol:       "grpc",
-				ServiceName:    "test-service",
-				ServiceVersion: "1.0.0",
-				Headers:        []string{"x-api-key=secret", "x-tenant=test"},
-				Timeout:        5 * time.Second,
-				BatchSize:      25,
-				FlushInterval:  2 * time.Second,
+				TimestampFields: []string{"timestamp", "ts"},
+				LevelFields:     []string{"level", "severity"},
+				MessageFields:   []string{"message", "msg"},
+				Timeout:         5 * time.Second,
+				BatchSize:       25,
+				FlushInterval:   2 * time.Second,
 			},
 			valid: true,
 		},
@@ -272,11 +260,6 @@ func TestFieldMappingPriorityIntegration(t *testing.T) {
 // TestLogProcessingPipeline tests the complete log processing pipeline
 func TestLogProcessingPipeline(t *testing.T) {
 	config := &Config{
-		Endpoint:        "localhost:4317",
-		Protocol:        "grpc",
-		ServiceName:     "test-service",
-		ServiceVersion:  "1.0.0",
-		Insecure:        true,
 		Timeout:         5 * time.Second,
 		BatchSize:       10,
 		FlushInterval:   1 * time.Second,
@@ -347,25 +330,23 @@ func TestErrorHandling(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name: "invalid protocol",
+			name: "negative batch size",
 			config: &Config{
-				Endpoint:       "localhost:4317",
-				Protocol:       "invalid",
-				ServiceName:    "test",
-				ServiceVersion: "1.0.0",
+				BatchSize:     -10,
+				Timeout:       10 * time.Second,
+				FlushInterval: 5 * time.Second,
 			},
-			expectError:   true,
-			errorContains: "unsupported protocol",
+			expectError:   false, // Validation happens at runtime, not during provider creation
+			errorContains: "",
 		},
 		{
-			name: "empty endpoint",
+			name: "zero timeout",
 			config: &Config{
-				Endpoint:       "",
-				Protocol:       "grpc",
-				ServiceName:    "test",
-				ServiceVersion: "1.0.0",
+				BatchSize:     50,
+				Timeout:       0,
+				FlushInterval: 5 * time.Second,
 			},
-			expectError:   false, // Empty endpoint doesn't cause immediate error in provider creation
+			expectError:   false, // Zero timeout doesn't cause immediate error in provider creation
 			errorContains: "",
 		},
 	}
@@ -458,15 +439,10 @@ func TestCommandExecution(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := &Config{
-				Endpoint:       "localhost:4317",
-				Protocol:       "grpc",
-				ServiceName:    "test-command",
-				ServiceVersion: "1.0.0",
-				Insecure:       true,
-				Timeout:        5 * time.Second,
-				BatchSize:      10,
-				FlushInterval:  1 * time.Second,
-				Command:        tt.command,
+				Timeout:       5 * time.Second,
+				BatchSize:     10,
+				FlushInterval: 1 * time.Second,
+				Command:       tt.command,
 			}
 
 			ctx := context.Background()
@@ -513,13 +489,7 @@ func TestStreamTagging(t *testing.T) {
 
 	// Create a logger provider to test stream tagging
 	ctx := context.Background()
-	config := &Config{
-		ServiceName:    "test",
-		ServiceVersion: "1.0.0",
-		Endpoint:       "localhost:4317",
-		Protocol:       "grpc",
-		Insecure:       true,
-	}
+	config := &Config{}
 
 	provider, err := createLoggerProvider(ctx, config)
 	if err != nil {
@@ -583,14 +553,9 @@ func TestCommandWrappingIntegration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := &Config{
-				Endpoint:       "localhost:4317",
-				Protocol:       "grpc",
-				ServiceName:    "integration-test",
-				ServiceVersion: "1.0.0",
-				Insecure:       true,
-				Timeout:        5 * time.Second,
-				BatchSize:      10,
-				FlushInterval:  1 * time.Second,
+				Timeout:       5 * time.Second,
+				BatchSize:     10,
+				FlushInterval: 1 * time.Second,
 			}
 
 			if tt.hasCmd {

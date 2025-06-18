@@ -45,25 +45,36 @@ go install github.com/middle-management/otel-logger@latest
 #### Reading from stdin
 ```bash
 # Send JSON logs via gRPC (default)
-cat app.log | otel-logger --endpoint localhost:4317
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 cat app.log | otel-logger
 
 # Send logs via HTTP
-tail -f app.log | otel-logger --endpoint http://localhost:4318 --protocol http
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+tail -f app.log | otel-logger
 
 # With custom service information
-cat app.log | otel-logger --endpoint localhost:4317 --service-name myapp --service-version 1.2.3
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_SERVICE_NAME=myapp \
+OTEL_SERVICE_VERSION=1.2.3 \
+cat app.log | otel-logger
 ```
 
 #### Wrapping commands
 ```bash
 # Wrap a simple command
-otel-logger --endpoint localhost:4317 --service-name myapp -- ./myapp --config config.yaml
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_SERVICE_NAME=myapp \
+otel-logger -- ./myapp --config config.yaml
 
 # Docker entrypoint usage
-otel-logger --endpoint otel-collector:4317 --service-name webapp -- npm start
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
+OTEL_SERVICE_NAME=webapp \
+otel-logger -- npm start
 
 # Wrap shell commands
-otel-logger --endpoint localhost:4317 --service-name script -- sh -c "python main.py"
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_SERVICE_NAME=script \
+otel-logger -- sh -c "python main.py"
 ```
 
 ### Advanced Usage
@@ -71,85 +82,106 @@ otel-logger --endpoint localhost:4317 --service-name script -- sh -c "python mai
 #### Stdin processing
 ```bash
 # Handle logs with timestamp prefixes using regex
-cat app.log | otel-logger --endpoint localhost:4317 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+cat app.log | otel-logger \
   --json-prefix "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[.\\d]*Z?\\s*"
 
 # Batch logs for better performance
-cat app.log | otel-logger --endpoint localhost:4317 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+cat app.log | otel-logger \
   --batch-size 100 --flush-interval 5s
 
 # Use with authentication headers
-cat app.log | otel-logger --endpoint https://api.example.com/v1/logs \
-  --protocol http \
-  --header "Authorization=Bearer your-token" \
-  --header "X-API-Key=your-api-key"
+OTEL_EXPORTER_OTLP_ENDPOINT=https://api.example.com/v1/logs \
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer your-token,X-API-Key=your-api-key" \
+cat app.log | otel-logger
 
 # Handle Logstash/ELK format logs
-cat logstash.log | otel-logger --endpoint localhost:4317 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+cat logstash.log | otel-logger \
   --timestamp-fields "@timestamp" \
   --level-fields "level" \
   --message-fields "message"
 
 # Handle Winston (Node.js) format logs
-cat winston.log | otel-logger --endpoint localhost:4317 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+cat winston.log | otel-logger \
   --timestamp-fields "timestamp" \
   --level-fields "level" \
   --message-fields "message,msg"
 
 # Handle custom application logs
-cat custom.log | otel-logger --endpoint localhost:4317 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+cat custom.log | otel-logger \
   --timestamp-fields "created_at,time" \
   --level-fields "severity,priority" \
   --message-fields "description,content,text"
 
 # Insecure connection (for development)
-cat app.log | otel-logger --endpoint localhost:4317 --insecure
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_EXPORTER_OTLP_INSECURE=true \
+cat app.log | otel-logger
 ```
 
 #### Command wrapping
 ```bash
 # Wrap application with custom batching
-otel-logger --endpoint localhost:4317 --batch-size 200 --flush-interval 2s \
-  --service-name my-service -- ./my-application
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_SERVICE_NAME=my-service \
+otel-logger --batch-size 200 --flush-interval 2s \
+  -- ./my-application
 
 # Wrap with custom field mappings for JSON logs
-otel-logger --endpoint localhost:4317 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+otel-logger \
   --timestamp-fields "ts,timestamp" \
   --level-fields "severity,level" \
   --message-fields "msg,message" \
   -- node app.js
 
 # Production deployment with authentication
-otel-logger --endpoint https://logs.example.com/v1/logs \
-  --protocol http \
-  --header "Authorization=Bearer $LOG_TOKEN" \
-  --service-name production-api \
-  --service-version $APP_VERSION \
-  -- ./api-server
+OTEL_EXPORTER_OTLP_ENDPOINT=https://logs.example.com/v1/logs \
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $LOG_TOKEN" \
+OTEL_SERVICE_NAME=production-api \
+OTEL_SERVICE_VERSION=$APP_VERSION \
+otel-logger -- ./api-server
 
 # Development with insecure connection
-otel-logger --endpoint localhost:4317 --insecure \
-  --service-name dev-app \
-  -- python app.py --debug
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_EXPORTER_OTLP_INSECURE=true \
+OTEL_SERVICE_NAME=dev-app \
+otel-logger -- python app.py --debug
 ```
 
-## Command Line Options
+## Configuration
+
+The tool uses standard OpenTelemetry environment variables for connection and service configuration, plus additional command-line flags for log processing options.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OpenTelemetry collector endpoint |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | Protocol to use (`grpc`, `http/protobuf`, or `http/json`) |
+| `OTEL_SERVICE_NAME` | `otel-logger` | Service name for telemetry |
+| `OTEL_SERVICE_VERSION` | `1.0.0` | Service version for telemetry |
+| `OTEL_EXPORTER_OTLP_INSECURE` | `false` | Use insecure connection |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `""` | Additional headers (comma-separated key=value pairs) |
+
+### Command Line Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--endpoint`, `-e` | `localhost:4317` | OpenTelemetry collector endpoint |
-| `--protocol`, `-p` | `grpc` | Protocol to use (`grpc` or `http`) |
-| `--service-name` | `otel-logger` | Service name for telemetry |
-| `--service-version` | `1.0.0` | Service version for telemetry |
-| `--insecure` | `false` | Use insecure connection |
 | `--timeout` | `10s` | Request timeout |
-| `--header` | `[]` | Additional headers (key=value format) |
 | `--json-prefix` | `""` | Regex pattern to extract JSON from prefixed logs |
 | `--batch-size` | `50` | Number of log entries to batch before sending |
 | `--flush-interval` | `5s` | Interval to flush batched logs |
 | `--timestamp-fields` | `[]` | JSON field names for timestamps (see defaults below) |
 | `--level-fields` | `[]` | JSON field names for log levels (see defaults below) |
 | `--message-fields` | `[]` | JSON field names for log messages (see defaults below) |
+| `--version` | `false` | Show version information |
 
 ## Supported Log Formats
 
@@ -274,15 +306,16 @@ otelcol --config-file otel-collector-config.yaml
 ```bash
 # Create some sample logs
 echo '{"timestamp": "2024-01-15T10:30:45Z", "level": "info", "message": "Hello World"}' | \
-  ./otel-logger --endpoint localhost:4317
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 ./otel-logger
 ```
 
 ### Example 1b: Basic command wrapping
 
 ```bash
 # Wrap a simple echo command
-./otel-logger --endpoint localhost:4317 --service-name hello-service -- \
-  sh -c 'echo "{\"level\":\"info\",\"message\":\"Hello from command!\"}"'
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_SERVICE_NAME=hello-service \
+./otel-logger -- sh -c 'echo "{\"level\":\"info\",\"message\":\"Hello from command!\"}"'
 ```
 
 ### Example 2: Custom field mappings
@@ -290,14 +323,16 @@ echo '{"timestamp": "2024-01-15T10:30:45Z", "level": "info", "message": "Hello W
 ```bash
 # Logstash/Elasticsearch format
 echo '{"@timestamp": "2024-01-15T10:30:45Z", "level": "ERROR", "message": "Database connection failed"}' | \
-  ./otel-logger --endpoint localhost:4317 \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  ./otel-logger \
   --timestamp-fields "@timestamp" \
   --level-fields "level" \
   --message-fields "message"
 
 # Custom application format
 echo '{"created_at": "2024-01-15T10:30:45Z", "severity": "high", "description": "Payment processing error", "details": "Card declined"}' | \
-  ./otel-logger --endpoint localhost:4317 \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  ./otel-logger \
   --timestamp-fields "created_at,timestamp" \
   --level-fields "severity,level" \
   --message-fields "description,message"
@@ -308,24 +343,33 @@ echo '{"created_at": "2024-01-15T10:30:45Z", "severity": "high", "description": 
 
 ```bash
 # Forward Docker container logs (traditional method)
-docker logs -f myapp 2>&1 | ./otel-logger --endpoint localhost:4317 --service-name myapp
+docker logs -f myapp 2>&1 | \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  OTEL_SERVICE_NAME=myapp \
+  ./otel-logger
 
 # Use as Docker ENTRYPOINT (recommended)
 # In your Dockerfile:
-# ENTRYPOINT ["./otel-logger", "--endpoint", "otel-collector:4317", "--service-name", "myapp", "--"]
+# ENV OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+# ENV OTEL_SERVICE_NAME=myapp
+# ENTRYPOINT ["./otel-logger", "--"]
 # CMD ["./myapp"]
 
 # Docker run with command wrapping
-docker run -it myimage otel-logger --endpoint otel-collector:4317 --service-name myapp -- ./application
+docker run -it \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
+  -e OTEL_SERVICE_NAME=myapp \
+  myimage otel-logger -- ./application
 ```
 
 ### Example 4: Application with prefixed logs (stdin)
 
 ```bash
 # Handle logs with timestamp prefixes
-tail -f /var/log/myapp.log | ./otel-logger \
-  --endpoint localhost:4317 \
-  --service-name myapp \
+tail -f /var/log/myapp.log | \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  OTEL_SERVICE_NAME=myapp \
+  ./otel-logger \
   --json-prefix "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[.\\d]*Z?\\s*"
 ```
 
@@ -333,7 +377,9 @@ tail -f /var/log/myapp.log | ./otel-logger \
 
 ```bash
 # Wrap application that outputs to both stdout and stderr
-./otel-logger --endpoint localhost:4317 --service-name mixed-app -- \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_SERVICE_NAME=mixed-app \
+./otel-logger -- \
   sh -c 'echo "Normal log to stdout"; echo "Error log to stderr" >&2; echo "{\"level\":\"info\",\"message\":\"JSON log\"}"'
 ```
 
@@ -341,21 +387,23 @@ tail -f /var/log/myapp.log | ./otel-logger \
 
 ```bash
 # Optimize for high throughput
-cat large-log-file.log | ./otel-logger \
-  --endpoint localhost:4317 \
+cat large-log-file.log | \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+  OTEL_SERVICE_NAME=batch-processor \
+  ./otel-logger \
   --batch-size 500 \
-  --flush-interval 1s \
-  --service-name batch-processor
+  --flush-interval 1s
 ```
 
 ### Example 5b: High-throughput command wrapping
 
 ```bash
 # Wrap high-output application with optimized batching
-./otel-logger --endpoint localhost:4317 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+OTEL_SERVICE_NAME=high-throughput-app \
+./otel-logger \
   --batch-size 1000 \
   --flush-interval 500ms \
-  --service-name high-throughput-app \
   -- ./generate-lots-of-logs
 ```
 
@@ -370,20 +418,22 @@ WORKDIR /app
 # Install otel-logger
 COPY otel-logger /usr/local/bin/otel-logger
 
+# Set OpenTelemetry configuration
+ENV OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+ENV OTEL_SERVICE_NAME=my-node-app
+
 # Use otel-logger as entrypoint
-ENTRYPOINT ["otel-logger", "--endpoint", "otel-collector:4317", "--service-name", "my-node-app", "--"]
+ENTRYPOINT ["otel-logger", "--"]
 CMD ["node", "server.js"]
 ```
 
 ```bash
 # Docker run with environment-specific configuration
-docker run -e OTEL_ENDPOINT=logs.prod.com:4317 \
-  -e SERVICE_NAME=prod-api \
-  myapp:latest otel-logger \
-  --endpoint $OTEL_ENDPOINT \
-  --protocol http \
-  --service-name $SERVICE_NAME \
-  -- node server.js
+docker run \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=https://logs.prod.com:4317 \
+  -e OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+  -e OTEL_SERVICE_NAME=prod-api \
+  myapp:latest otel-logger -- node server.js
 ```
 
 ## Performance Considerations
@@ -436,7 +486,7 @@ The project includes comprehensive tests:
 Add verbose output by redirecting stderr:
 
 ```bash
-cat app.log | ./otel-logger --endpoint localhost:4317 2> debug.log
+cat app.log | OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 ./otel-logger 2> debug.log
 ```
 
 ### Performance Testing

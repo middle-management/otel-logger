@@ -313,13 +313,12 @@ func TestLogLevelToSeverity(t *testing.T) {
 func TestConfig_Version(t *testing.T) {
 	// Test the version string formatting
 	version = "1.2.3"
-	buildTime = "2024-01-15_10:30:45"
 	gitCommit = "abc123"
 
 	config := Config{}
 	versionStr := config.Version()
 
-	expected := "otel-logger 1.2.3 (built: 2024-01-15_10:30:45, commit: abc123)"
+	expected := "otel-logger 1.2.3 (commit: abc123)"
 	if versionStr != expected {
 		t.Errorf("Expected version string %s, got %s", expected, versionStr)
 	}
