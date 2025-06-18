@@ -318,32 +318,27 @@ func logLevelToSeverity(level string) log.Severity {
 	}
 }
 
-func createLoggerProvider(ctx context.Context, config *Config) (*sdklog.LoggerProvider, error) {
+func createExporter(ctx context.Context) (sdklog.Exporter, error) {
 	protocol := "http/protobuf"
-	if proto, ok := os.LookupEnv("OTEL_EXPORTER_LOGS_PROTOCOL"); ok {
+	if proto, ok := os.LookupEnv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL"); ok {
 		protocol = proto
-	} else if proto, ok := os.LookupEnv("OTEL_EXPORTER_PROTOCOL"); ok {
+	} else if proto, ok := os.LookupEnv("OTEL_EXPORTER_OTLP_PROTOCOL"); ok {
 		protocol = proto
 	}
-
-	// Create exporter based on protocol
-	var exporter sdklog.Exporter
-	var err error
 	switch strings.ToLower(protocol) {
 	case "grpc":
-		exporter, err = otlploggrpc.New(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gRPC exporter: %w", err)
-		}
-
+		return otlploggrpc.New(ctx)
 	case "http", "http/protobuf", "http/json":
-		exporter, err = otlploghttp.New(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP exporter: %w", err)
-		}
-
+		return otlploghttp.New(ctx)
 	default:
 		return nil, fmt.Errorf("unsupported protocol (supported: grpc, http/protobuf, http/json): %s", protocol)
+	}
+}
+
+func createLoggerProvider(ctx context.Context, config *Config) (*sdklog.LoggerProvider, error) {
+	exporter, err := createExporter(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create exporter: %w", err)
 	}
 
 	// Create processor with batching configuration
