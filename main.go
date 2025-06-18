@@ -5,10 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	stdlog "log"
 	"os"
+	"os/exec"
+	"os/signal"
 	"regexp"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/alexflint/go-arg"
@@ -43,6 +48,7 @@ type Config struct {
 	LevelFields     []string      `arg:"--level-fields,separate" help:"JSON field names for log levels (default: level,lvl,severity,priority)"`
 	MessageFields   []string      `arg:"--message-fields,separate" help:"JSON field names for log messages (default: message,msg,text,content)"`
 	ShowVersion     bool          `arg:"--version" help:"Show version information"`
+	Command         []string      `arg:"positional" help:"Command to execute and capture logs from (if not provided, reads from stdin)"`
 }
 
 func (Config) Version() string {
@@ -50,13 +56,22 @@ func (Config) Version() string {
 }
 
 func (Config) Description() string {
-	return `otel-logger reads logs from stdin and sends them to an OpenTelemetry collector.
+	return `otel-logger reads logs from stdin or wraps a command and sends logs to an OpenTelemetry collector.
 It can handle JSON logs as well as partial JSON with prefixes like timestamps.
 Field mappings are configurable to support different logging frameworks.
 
 Examples:
-  # Send JSON logs via gRPC (uses default field mappings)
+  # Read from stdin and send JSON logs via gRPC (uses default field mappings)
   cat app.log | otel-logger --endpoint localhost:4317 --protocol grpc
+
+  # Wrap a command and capture both stdout and stderr
+  otel-logger --endpoint localhost:4317 --service-name myapp -- ./myapp --config config.yaml
+
+  # Docker entrypoint usage - capture all output from application
+  otel-logger --endpoint otel-collector:4317 --service-name webapp -- npm start
+
+  # Wrap a shell command with custom batching
+  otel-logger --endpoint localhost:4317 --batch-size 100 -- sh -c "while true; do echo 'test'; sleep 1; done"
 
   # Send logs via HTTP with custom service name
   tail -f app.log | otel-logger --endpoint http://localhost:4318 --protocol http --service-name myapp
@@ -84,7 +99,13 @@ Examples:
 Field Mapping Defaults:
   Timestamps: timestamp, ts, time, @timestamp
   Levels:     level, lvl, severity, priority
-  Messages:   message, msg, text, content`
+  Messages:   message, msg, text, content
+
+When wrapping commands:
+  - stdout logs are tagged with stream=stdout
+  - stderr logs are tagged with stream=stderr
+  - Command exit code is logged as a final entry
+  - Signals are properly forwarded to the wrapped process`
 }
 
 // LogEntry represents a parsed log entry
@@ -94,6 +115,7 @@ type LogEntry struct {
 	Message   string
 	Fields    map[string]interface{}
 	Raw       string
+	Stream    string // stdout, stderr, or empty for stdin
 }
 
 // FieldMappings defines configurable field name mappings for JSON log parsing
@@ -253,7 +275,7 @@ func (p *LogProcessor) ProcessLogEntry(ctx context.Context, entry *LogEntry) {
 	record.SetSeverity(logLevelToSeverity(entry.Level))
 
 	// Add attributes from parsed fields
-	attrs := make([]log.KeyValue, 0, len(entry.Fields)+2)
+	attrs := make([]log.KeyValue, 0, len(entry.Fields)+3)
 	for key, value := range entry.Fields {
 		attrs = append(attrs, log.String(key, fmt.Sprintf("%v", value)))
 	}
@@ -263,6 +285,11 @@ func (p *LogProcessor) ProcessLogEntry(ctx context.Context, entry *LogEntry) {
 		log.String("log.level", entry.Level),
 		log.String("raw_log", entry.Raw),
 	)
+
+	// Add stream information if available
+	if entry.Stream != "" {
+		attrs = append(attrs, log.String("stream", entry.Stream))
+	}
 
 	record.AddAttributes(attrs...)
 
@@ -413,6 +440,130 @@ func processLogs(ctx context.Context, extractor *JSONExtractor, processor *LogPr
 	return nil
 }
 
+// processStream processes logs from a single stream (stdout or stderr)
+func processStream(ctx context.Context, reader io.Reader, stream string, extractor *JSONExtractor, processor *LogProcessor, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		entry, err := extractor.ParseLogEntry(line)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing log entry from %s: %v\n", stream, err)
+			continue
+		}
+
+		// Tag with stream information
+		entry.Stream = stream
+
+		processor.ProcessLogEntry(ctx, entry)
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading from %s: %v\n", stream, err)
+	}
+}
+
+// executeCommand executes the given command and processes its output
+func executeCommand(ctx context.Context, config *Config, extractor *JSONExtractor, processor *LogProcessor) error {
+	if len(config.Command) == 0 {
+		return fmt.Errorf("no command specified")
+	}
+
+	// Create command
+	var cmd *exec.Cmd
+	if len(config.Command) == 1 {
+		cmd = exec.CommandContext(ctx, config.Command[0])
+	} else {
+		cmd = exec.CommandContext(ctx, config.Command[0], config.Command[1:]...)
+	}
+
+	// Create pipes for stdout and stderr
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	// Start the command
+	fmt.Fprintf(os.Stderr, "Starting command: %s\n", strings.Join(config.Command, " "))
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start command: %w", err)
+	}
+
+	// Process streams concurrently
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go processStream(ctx, stdoutPipe, "stdout", extractor, processor, &wg)
+	go processStream(ctx, stderrPipe, "stderr", extractor, processor, &wg)
+
+	// Set up signal forwarding
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Wait for command completion or signal
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	var cmdErr error
+	select {
+	case sig := <-sigChan:
+		fmt.Fprintf(os.Stderr, "Received signal %v, forwarding to process...\n", sig)
+		if cmd.Process != nil {
+			cmd.Process.Signal(sig)
+		}
+		cmdErr = <-done
+	case cmdErr = <-done:
+		// Command completed normally
+	}
+
+	// Wait for stream processing to complete
+	wg.Wait()
+
+	// Log the command exit
+	exitCode := 0
+	if cmdErr != nil {
+		if exitError, ok := cmdErr.(*exec.ExitError); ok {
+			exitCode = exitError.ExitCode()
+		}
+	}
+
+	// Create a log entry for the command completion
+	exitEntry := &LogEntry{
+		Timestamp: time.Now(),
+		Level:     "info",
+		Message:   fmt.Sprintf("Command completed with exit code %d", exitCode),
+		Fields: map[string]interface{}{
+			"command":     strings.Join(config.Command, " "),
+			"exit_code":   exitCode,
+			"exit_status": cmdErr != nil,
+		},
+		Raw:    fmt.Sprintf("Command exit: %d", exitCode),
+		Stream: "system",
+	}
+
+	processor.ProcessLogEntry(ctx, exitEntry)
+
+	fmt.Fprintf(os.Stderr, "Command completed with exit code: %d\n", exitCode)
+
+	if cmdErr != nil && exitCode != 0 {
+		return fmt.Errorf("command failed with exit code %d", exitCode)
+	}
+
+	return nil
+}
+
 func runCommand(config *Config) error {
 	ctx := context.Background()
 
@@ -459,12 +610,20 @@ func runCommand(config *Config) error {
 	// Create JSON extractor
 	extractor := NewJSONExtractor(config.JSONPrefix, fieldMappings)
 
-	// Process logs from stdin
-	fmt.Fprintf(os.Stderr, "Reading logs from stdin and sending to %s://%s (batch_size=%d)\n", config.Protocol, config.Endpoint, config.BatchSize)
 	fmt.Fprintf(os.Stderr, "Field mappings - Timestamp: %v, Level: %v, Message: %v\n",
 		fieldMappings.TimestampFields, fieldMappings.LevelFields, fieldMappings.MessageFields)
-	if err := processLogs(ctx, extractor, processor); err != nil {
-		return err
+
+	var processingErr error
+
+	// Check if we should execute a command or read from stdin
+	if len(config.Command) > 0 {
+		// Execute command and process its output
+		fmt.Fprintf(os.Stderr, "Executing command and sending logs to %s://%s (batch_size=%d)\n", config.Protocol, config.Endpoint, config.BatchSize)
+		processingErr = executeCommand(ctx, config, extractor, processor)
+	} else {
+		// Process logs from stdin
+		fmt.Fprintf(os.Stderr, "Reading logs from stdin and sending to %s://%s (batch_size=%d)\n", config.Protocol, config.Endpoint, config.BatchSize)
+		processingErr = processLogs(ctx, extractor, processor)
 	}
 
 	// Force flush before exit
@@ -473,6 +632,11 @@ func runCommand(config *Config) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "Finished processing logs and flushed to collector\n")
+
+	if processingErr != nil {
+		return processingErr
+	}
+
 	return nil
 }
 

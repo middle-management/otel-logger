@@ -1,11 +1,13 @@
 # OpenTelemetry Log Forwarder
 
-A lightweight CLI tool that reads logs from stdin and forwards them to an OpenTelemetry collector using the **official OpenTelemetry Go SDK**. It intelligently parses JSON logs, handles various timestamp formats, and can extract JSON from logs with prefixes (like timestamps or log levels).
+A lightweight CLI tool that reads logs from stdin or wraps commands and forwards logs to an OpenTelemetry collector using the **official OpenTelemetry Go SDK**. It intelligently parses JSON logs, handles various timestamp formats, can extract JSON from logs with prefixes, and can capture both stdout and stderr from wrapped processes.
 
 ## Features
 
 - **Official OpenTelemetry SDK**: Built with the official OpenTelemetry Go SDK (beta logging support)
 - **Lightweight CLI**: Built with `go-arg` for clean, fast argument parsing
+- **Dual modes**: Read from stdin OR wrap commands and capture their output
+- **Command wrapping**: Execute processes and capture both stdout and stderr with stream tagging
 - **Multiple protocols**: Supports both gRPC and HTTP/HTTPS protocols via official OTLP exporters
 - **JSON parsing**: Automatically detects and parses JSON log entries
 - **Configurable field mappings**: Support for different logging frameworks (Logstash, Winston, etc.)
@@ -13,6 +15,9 @@ A lightweight CLI tool that reads logs from stdin and forwards them to an OpenTe
 - **Flexible timestamp parsing**: Supports multiple timestamp formats (RFC3339, Unix timestamps, etc.)
 - **Official batching**: Uses OpenTelemetry SDK's built-in batching for optimal performance
 - **Custom headers**: Supports additional headers for authentication
+- **Signal forwarding**: Properly forwards signals to wrapped processes
+- **Stream tagging**: Tags logs with their source (stdout, stderr, system)
+- **Docker-ready**: Perfect for use as a Docker ENTRYPOINT
 - **Insecure connections**: Optional support for insecure connections (useful for development)
 - **Service metadata**: Configurable service name and version for telemetry
 - **Standards compliance**: Full OTLP specification compliance via official SDK
@@ -37,6 +42,7 @@ go install github.com/middle-management/otel-logger@latest
 
 ### Basic Usage
 
+#### Reading from stdin
 ```bash
 # Send JSON logs via gRPC (default)
 cat app.log | otel-logger --endpoint localhost:4317
@@ -48,8 +54,21 @@ tail -f app.log | otel-logger --endpoint http://localhost:4318 --protocol http
 cat app.log | otel-logger --endpoint localhost:4317 --service-name myapp --service-version 1.2.3
 ```
 
+#### Wrapping commands
+```bash
+# Wrap a simple command
+otel-logger --endpoint localhost:4317 --service-name myapp -- ./myapp --config config.yaml
+
+# Docker entrypoint usage
+otel-logger --endpoint otel-collector:4317 --service-name webapp -- npm start
+
+# Wrap shell commands
+otel-logger --endpoint localhost:4317 --service-name script -- sh -c "python main.py"
+```
+
 ### Advanced Usage
 
+#### Stdin processing
 ```bash
 # Handle logs with timestamp prefixes using regex
 cat app.log | otel-logger --endpoint localhost:4317 \
@@ -85,6 +104,33 @@ cat custom.log | otel-logger --endpoint localhost:4317 \
 
 # Insecure connection (for development)
 cat app.log | otel-logger --endpoint localhost:4317 --insecure
+```
+
+#### Command wrapping
+```bash
+# Wrap application with custom batching
+otel-logger --endpoint localhost:4317 --batch-size 200 --flush-interval 2s \
+  --service-name my-service -- ./my-application
+
+# Wrap with custom field mappings for JSON logs
+otel-logger --endpoint localhost:4317 \
+  --timestamp-fields "ts,timestamp" \
+  --level-fields "severity,level" \
+  --message-fields "msg,message" \
+  -- node app.js
+
+# Production deployment with authentication
+otel-logger --endpoint https://logs.example.com/v1/logs \
+  --protocol http \
+  --header "Authorization=Bearer $LOG_TOKEN" \
+  --service-name production-api \
+  --service-version $APP_VERSION \
+  -- ./api-server
+
+# Development with insecure connection
+otel-logger --endpoint localhost:4317 --insecure \
+  --service-name dev-app \
+  -- python app.py --debug
 ```
 
 ## Command Line Options
@@ -130,6 +176,20 @@ The tool gracefully handles mixed log formats, treating non-JSON lines as plain 
 2024-01-15T10:30:45Z INFO Starting application server on port 8080
 {"timestamp": "2024-01-15T10:30:46Z", "level": "info", "message": "Database connected"}
 [ERROR] 2024-01-15 10:30:47 - Failed to load configuration file
+```
+
+### Stream Tagging (Command Mode)
+
+When wrapping commands, logs are automatically tagged with their source stream:
+
+- **stdout** logs: Tagged with `stream=stdout`
+- **stderr** logs: Tagged with `stream=stderr`  
+- **system** logs: Command exit status, tagged with `stream=system`
+
+```json
+{"level": "info", "message": "App started", "stream": "stdout", "raw_log": "App started"}
+{"level": "error", "message": "Connection failed", "stream": "stderr", "raw_log": "Connection failed"}
+{"level": "info", "message": "Command completed with exit code 0", "stream": "system", "command": "./myapp", "exit_code": 0}
 ```
 
 ### Configurable JSON Field Mappings
@@ -209,12 +269,20 @@ otelcol --config-file otel-collector-config.yaml
 
 ## Examples
 
-### Example 1: Basic JSON logs
+### Example 1: Basic JSON logs (stdin)
 
 ```bash
 # Create some sample logs
 echo '{"timestamp": "2024-01-15T10:30:45Z", "level": "info", "message": "Hello World"}' | \
   ./otel-logger --endpoint localhost:4317
+```
+
+### Example 1b: Basic command wrapping
+
+```bash
+# Wrap a simple echo command
+./otel-logger --endpoint localhost:4317 --service-name hello-service -- \
+  sh -c 'echo "{\"level\":\"info\",\"message\":\"Hello from command!\"}"'
 ```
 
 ### Example 2: Custom field mappings
@@ -236,13 +304,22 @@ echo '{"created_at": "2024-01-15T10:30:45Z", "severity": "high", "description": 
 ```
 
 ### Example 3: Docker application logs
+### Docker application logs
 
 ```bash
-# Forward Docker container logs
+# Forward Docker container logs (traditional method)
 docker logs -f myapp 2>&1 | ./otel-logger --endpoint localhost:4317 --service-name myapp
+
+# Use as Docker ENTRYPOINT (recommended)
+# In your Dockerfile:
+# ENTRYPOINT ["./otel-logger", "--endpoint", "otel-collector:4317", "--service-name", "myapp", "--"]
+# CMD ["./myapp"]
+
+# Docker run with command wrapping
+docker run -it myimage otel-logger --endpoint otel-collector:4317 --service-name myapp -- ./application
 ```
 
-### Example 4: Application with prefixed logs
+### Example 4: Application with prefixed logs (stdin)
 
 ```bash
 # Handle logs with timestamp prefixes
@@ -252,7 +329,15 @@ tail -f /var/log/myapp.log | ./otel-logger \
   --json-prefix "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[.\\d]*Z?\\s*"
 ```
 
-### Example 5: High-throughput scenario
+### Example 4b: Command wrapping with mixed output
+
+```bash
+# Wrap application that outputs to both stdout and stderr
+./otel-logger --endpoint localhost:4317 --service-name mixed-app -- \
+  sh -c 'echo "Normal log to stdout"; echo "Error log to stderr" >&2; echo "{\"level\":\"info\",\"message\":\"JSON log\"}"'
+```
+
+### Example 5: High-throughput scenario (stdin)
 
 ```bash
 # Optimize for high throughput
@@ -261,6 +346,44 @@ cat large-log-file.log | ./otel-logger \
   --batch-size 500 \
   --flush-interval 1s \
   --service-name batch-processor
+```
+
+### Example 5b: High-throughput command wrapping
+
+```bash
+# Wrap high-output application with optimized batching
+./otel-logger --endpoint localhost:4317 \
+  --batch-size 1000 \
+  --flush-interval 500ms \
+  --service-name high-throughput-app \
+  -- ./generate-lots-of-logs
+```
+
+### Example 6: Docker ENTRYPOINT usage
+
+```dockerfile
+# Dockerfile
+FROM node:18-alpine
+COPY . /app
+WORKDIR /app
+
+# Install otel-logger
+COPY otel-logger /usr/local/bin/otel-logger
+
+# Use otel-logger as entrypoint
+ENTRYPOINT ["otel-logger", "--endpoint", "otel-collector:4317", "--service-name", "my-node-app", "--"]
+CMD ["node", "server.js"]
+```
+
+```bash
+# Docker run with environment-specific configuration
+docker run -e OTEL_ENDPOINT=logs.prod.com:4317 \
+  -e SERVICE_NAME=prod-api \
+  myapp:latest otel-logger \
+  --endpoint $OTEL_ENDPOINT \
+  --protocol http \
+  --service-name $SERVICE_NAME \
+  -- node server.js
 ```
 
 ## Performance Considerations

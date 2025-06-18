@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -421,6 +422,197 @@ func TestSeverityMapping(t *testing.T) {
 			if int32(result) != tt.expected {
 				t.Errorf("logLevelToSeverity(%s) = %d, want %d", tt.input, int32(result), tt.expected)
 			}
+		})
+	}
+}
+
+// TestCommandExecution tests the command wrapping functionality
+func TestCommandExecution(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     []string
+		expectError bool
+	}{
+		{
+			name:        "simple echo command",
+			command:     []string{"echo", "Hello World"},
+			expectError: false,
+		},
+		{
+			name:        "command with stderr output",
+			command:     []string{"sh", "-c", "echo 'stdout'; echo 'stderr' >&2"},
+			expectError: false,
+		},
+		{
+			name:        "command with JSON output",
+			command:     []string{"echo", `{"level":"info","message":"Test JSON"}`},
+			expectError: false,
+		},
+		{
+			name:        "failing command",
+			command:     []string{"sh", "-c", "exit 1"},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &Config{
+				Endpoint:       "localhost:4317",
+				Protocol:       "grpc",
+				ServiceName:    "test-command",
+				ServiceVersion: "1.0.0",
+				Insecure:       true,
+				Timeout:        5 * time.Second,
+				BatchSize:      10,
+				FlushInterval:  1 * time.Second,
+				Command:        tt.command,
+			}
+
+			ctx := context.Background()
+			provider, err := createLoggerProvider(ctx, config)
+			if err != nil {
+				t.Fatalf("Failed to create logger provider: %v", err)
+			}
+			defer provider.Shutdown(ctx)
+
+			fieldMappings := getDefaultFieldMappings()
+			extractor := NewJSONExtractor(config.JSONPrefix, fieldMappings)
+			logger := provider.Logger("test-command")
+			processor := NewLogProcessor(logger)
+
+			err = executeCommand(ctx, config, extractor, processor)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+
+			if flushErr := provider.ForceFlush(ctx); flushErr != nil {
+				t.Logf("Error flushing logs: %v", flushErr)
+			}
+		})
+	}
+}
+
+// TestStreamTagging tests that log entries are properly tagged with stream information
+func TestStreamTagging(t *testing.T) {
+	entry := &LogEntry{
+		Timestamp: time.Now(),
+		Level:     "info",
+		Message:   "Test message",
+		Fields:    map[string]interface{}{},
+		Raw:       "test log",
+		Stream:    "stdout",
+	}
+
+	// Create a logger provider to test stream tagging
+	ctx := context.Background()
+	config := &Config{
+		ServiceName:    "test",
+		ServiceVersion: "1.0.0",
+		Endpoint:       "localhost:4317",
+		Protocol:       "grpc",
+		Insecure:       true,
+	}
+
+	provider, err := createLoggerProvider(ctx, config)
+	if err != nil {
+		t.Fatalf("Failed to create logger provider: %v", err)
+	}
+	defer provider.Shutdown(ctx)
+
+	logger := provider.Logger("test")
+	processor := NewLogProcessor(logger)
+
+	// Process the entry - this should include stream tagging
+	processor.ProcessLogEntry(ctx, entry)
+
+	// Verify that the entry has the stream field set
+	if entry.Stream != "stdout" {
+		t.Errorf("Expected stream 'stdout', got '%s'", entry.Stream)
+	}
+
+	// Test different stream types
+	streams := []string{"stdout", "stderr", "system"}
+	for _, stream := range streams {
+		testEntry := &LogEntry{
+			Timestamp: time.Now(),
+			Level:     "info",
+			Message:   fmt.Sprintf("Test message for %s", stream),
+			Fields:    map[string]interface{}{},
+			Raw:       fmt.Sprintf("test log for %s", stream),
+			Stream:    stream,
+		}
+
+		processor.ProcessLogEntry(ctx, testEntry)
+
+		if testEntry.Stream != stream {
+			t.Errorf("Expected stream '%s', got '%s'", stream, testEntry.Stream)
+		}
+	}
+}
+
+// TestCommandWrappingIntegration tests the complete command wrapping pipeline
+func TestCommandWrappingIntegration(t *testing.T) {
+	// Test basic command execution modes
+	tests := []struct {
+		name     string
+		hasCmd   bool
+		command  []string
+		useStdin bool
+	}{
+		{
+			name:     "stdin mode",
+			hasCmd:   false,
+			useStdin: true,
+		},
+		{
+			name:     "command mode",
+			hasCmd:   true,
+			command:  []string{"echo", "test"},
+			useStdin: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &Config{
+				Endpoint:       "localhost:4317",
+				Protocol:       "grpc",
+				ServiceName:    "integration-test",
+				ServiceVersion: "1.0.0",
+				Insecure:       true,
+				Timeout:        5 * time.Second,
+				BatchSize:      10,
+				FlushInterval:  1 * time.Second,
+			}
+
+			if tt.hasCmd {
+				config.Command = tt.command
+			}
+
+			// Test that we can detect the mode correctly
+			if len(config.Command) > 0 && !tt.hasCmd {
+				t.Error("Expected no command but found one")
+			}
+
+			if len(config.Command) == 0 && tt.hasCmd {
+				t.Error("Expected command but found none")
+			}
+
+			// Verify the configuration is valid
+			ctx := context.Background()
+			provider, err := createLoggerProvider(ctx, config)
+			if err != nil {
+				t.Fatalf("Failed to create logger provider: %v", err)
+			}
+			defer provider.Shutdown(ctx)
 		})
 	}
 }

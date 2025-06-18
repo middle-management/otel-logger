@@ -1,0 +1,62 @@
+# Example Dockerfile showing how to use otel-logger as an entrypoint
+# This example wraps a Node.js application with otel-logger
+
+FROM node:18-alpine
+
+# Install dependencies for a sample Node.js app
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+
+# Copy application code
+COPY . .
+
+# Copy the otel-logger binary (build it first with: go build -o otel-logger .)
+# In production, you might download it from a release or build in a multi-stage build
+COPY otel-logger /usr/local/bin/otel-logger
+RUN chmod +x /usr/local/bin/otel-logger
+
+# Set default environment variables for OpenTelemetry
+ENV OTEL_ENDPOINT=otel-collector:4317
+ENV SERVICE_NAME=my-node-app
+ENV SERVICE_VERSION=1.0.0
+
+# Use otel-logger as the entrypoint to wrap the Node.js application
+# This will capture all stdout/stderr from the Node.js app and forward to OTLP
+ENTRYPOINT ["otel-logger", \
+    "--endpoint", "${OTEL_ENDPOINT}", \
+    "--service-name", "${SERVICE_NAME}", \
+    "--service-version", "${SERVICE_VERSION}", \
+    "--protocol", "grpc", \
+    "--batch-size", "100", \
+    "--flush-interval", "5s", \
+    "--"]
+
+# The actual application command
+CMD ["node", "server.js"]
+
+# Usage examples:
+#
+# 1. Build the image:
+#    docker build -t myapp-with-otel .
+#
+# 2. Run with default settings:
+#    docker run myapp-with-otel
+#
+# 3. Run with custom OTEL endpoint:
+#    docker run -e OTEL_ENDPOINT=localhost:4317 myapp-with-otel
+#
+# 4. Run with HTTP protocol:
+#    docker run myapp-with-otel otel-logger \
+#      --endpoint http://localhost:4318 \
+#      --protocol http \
+#      --service-name custom-service \
+#      -- node server.js
+#
+# 5. Run with authentication:
+#    docker run myapp-with-otel otel-logger \
+#      --endpoint https://logs.example.com \
+#      --protocol http \
+#      --header "Authorization=Bearer $TOKEN" \
+#      --service-name prod-app \
+#      -- node server.js

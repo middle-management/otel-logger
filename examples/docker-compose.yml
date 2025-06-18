@@ -1,0 +1,190 @@
+# Docker Compose example showing otel-logger with OpenTelemetry Collector
+# This demonstrates a complete logging pipeline setup
+
+version: '3.8'
+
+services:
+  # OpenTelemetry Collector
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "1888:1888"   # pprof extension
+      - "8888:8888"   # Prometheus metrics
+      - "8889:8889"   # Prometheus exporter metrics
+      - "13133:13133" # health_check extension
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "55679:55679" # zpages extension
+    depends_on:
+      - jaeger
+    networks:
+      - otel-network
+
+  # Jaeger for trace/log visualization (optional)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "14250:14250" # Jaeger gRPC
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - otel-network
+
+  # Sample application using otel-logger as entrypoint
+  sample-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.sample-app
+    container_name: sample-app
+    environment:
+      - OTEL_ENDPOINT=otel-collector:4317
+      - SERVICE_NAME=sample-application
+      - SERVICE_VERSION=1.0.0
+    depends_on:
+      - otel-collector
+    networks:
+      - otel-network
+    # Override the command to use otel-logger
+    command: >
+      otel-logger
+      --endpoint otel-collector:4317
+      --protocol grpc
+      --service-name sample-application
+      --service-version 1.0.0
+      --batch-size 50
+      --flush-interval 5s
+      --
+      sh -c "
+        echo 'Starting sample application...';
+        while true; do
+          echo '{\"timestamp\":\"'$(date -Iseconds)'\",\"level\":\"info\",\"message\":\"Heartbeat from sample app\",\"counter\":'$$((RANDOM%100))'}';
+          echo '{\"timestamp\":\"'$(date -Iseconds)'\",\"level\":\"debug\",\"message\":\"Debug message\",\"thread\":\"worker-1\"}' >&2;
+          sleep 5;
+        done
+      "
+
+  # Another sample app showing different logging patterns
+  json-app:
+    image: alpine:latest
+    container_name: json-app
+    volumes:
+      - ../otel-logger:/usr/local/bin/otel-logger:ro
+    environment:
+      - OTEL_ENDPOINT=otel-collector:4317
+    depends_on:
+      - otel-collector
+    networks:
+      - otel-network
+    command: >
+      sh -c "
+        chmod +x /usr/local/bin/otel-logger &&
+        /usr/local/bin/otel-logger
+        --endpoint otel-collector:4317
+        --service-name json-logger
+        --timestamp-fields timestamp,ts
+        --level-fields level,severity
+        --message-fields message,msg
+        --
+        sh -c '
+          echo \"Starting JSON application...\";
+          for i in \$$(seq 1 10); do
+            echo \"{\\\"ts\\\":\\\"\$$(date -Iseconds)\\\",\\\"level\\\":\\\"info\\\",\\\"message\\\":\\\"Processing item $$i\\\",\\\"item_id\\\":$$i}\";
+            echo \"{\\\"timestamp\\\":\\\"\$$(date -Iseconds)\\\",\\\"severity\\\":\\\"warn\\\",\\\"msg\\\":\\\"Warning for item $$i\\\",\\\"item_id\\\":$$i}\" >&2;
+            sleep 2;
+          done;
+          echo \"JSON application completed\";
+        '
+      "
+
+  # Traditional application that outputs plain text logs
+  text-app:
+    image: alpine:latest
+    container_name: text-app
+    volumes:
+      - ../otel-logger:/usr/local/bin/otel-logger:ro
+    depends_on:
+      - otel-collector
+    networks:
+      - otel-network
+    command: >
+      sh -c "
+        chmod +x /usr/local/bin/otel-logger &&
+        /usr/local/bin/otel-logger
+        --endpoint otel-collector:4317
+        --service-name text-logger
+        --json-prefix '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[Z0-9:+-]*\s*'
+        --
+        sh -c '
+          echo \"Starting text application...\";
+          for i in \$$(seq 1 5); do
+            echo \"\$$(date -Iseconds) INFO: Processing request $$i\";
+            echo \"\$$(date -Iseconds) ERROR: Simulated error for request $$i\" >&2;
+            echo \"\$$(date -Iseconds) {\\\"level\\\":\\\"debug\\\",\\\"message\\\":\\\"Mixed format log\\\",\\\"request_id\\\":$$i}\";
+            sleep 3;
+          done;
+          echo \"Text application completed\";
+        '
+      "
+
+networks:
+  otel-network:
+    driver: bridge
+
+# To use this docker-compose setup:
+#
+# 1. Create the otel-collector-config.yaml file (see example below)
+# 2. Build your otel-logger binary: go build -o otel-logger .
+# 3. Run: docker-compose up
+# 4. View logs in Jaeger UI at http://localhost:16686
+# 5. View collector metrics at http://localhost:8888/metrics
+#
+# Example otel-collector-config.yaml:
+# ---
+# receivers:
+#   otlp:
+#     protocols:
+#       grpc:
+#         endpoint: 0.0.0.0:4317
+#       http:
+#         endpoint: 0.0.0.0:4318
+#
+# processors:
+#   batch:
+#     timeout: 1s
+#     send_batch_size: 1024
+#     send_batch_max_size: 2048
+#
+# exporters:
+#   logging:
+#     loglevel: info
+#   jaeger:
+#     endpoint: jaeger:14250
+#     tls:
+#       insecure: true
+#   file:
+#     path: /tmp/otel-logs.json
+#
+# extensions:
+#   health_check:
+#   pprof:
+#     endpoint: :1888
+#   zpages:
+#     endpoint: :55679
+#
+# service:
+#   extensions: [pprof, zpages, health_check]
+#   pipelines:
+#     logs:
+#       receivers: [otlp]
+#       processors: [batch]
+#       exporters: [logging, file]
+#     traces:
+#       receivers: [otlp]
+#       processors: [batch]
+#       exporters: [jaeger]

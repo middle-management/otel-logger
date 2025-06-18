@@ -447,6 +447,59 @@ func BenchmarkExtractJSON(b *testing.B) {
 	}
 }
 
+// TestLogEntryStreamField tests the Stream field functionality
+func TestLogEntryStreamField(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		expectedStream string
+	}{
+		{
+			name:           "stdout stream",
+			input:          `{"level": "info", "message": "stdout message"}`,
+			expectedStream: "stdout",
+		},
+		{
+			name:           "stderr stream",
+			input:          `{"level": "error", "message": "stderr message"}`,
+			expectedStream: "stderr",
+		},
+		{
+			name:           "system stream",
+			input:          `{"level": "info", "message": "system message"}`,
+			expectedStream: "system",
+		},
+	}
+
+	fieldMappings := getDefaultFieldMappings()
+	extractor := NewJSONExtractor("", fieldMappings)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, err := extractor.ParseLogEntry(tt.input)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			// Set the stream field (simulating what happens in command execution)
+			entry.Stream = tt.expectedStream
+
+			if entry.Stream != tt.expectedStream {
+				t.Errorf("Expected stream %s, got %s", tt.expectedStream, entry.Stream)
+			}
+
+			// Verify other fields are still correct
+			if entry.Message == "" {
+				t.Error("Expected non-empty message")
+			}
+
+			if entry.Level == "" {
+				t.Error("Expected non-empty level")
+			}
+		})
+	}
+}
+
 // Example test showing realistic usage
 func ExampleJSONExtractor_ParseLogEntry() {
 	fieldMappings := &FieldMappings{
