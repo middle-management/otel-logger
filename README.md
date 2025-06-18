@@ -1,6 +1,6 @@
 # OpenTelemetry Log Forwarder
 
-A lightweight CLI tool that reads logs from stdin or wraps commands and forwards logs to an OpenTelemetry collector using the **official OpenTelemetry Go SDK**. It intelligently parses JSON logs, handles various timestamp formats, can extract JSON from logs with prefixes, and can capture both stdout and stderr from wrapped processes.
+A lightweight CLI tool that reads logs from stdin or wraps commands and forwards logs to an OpenTelemetry collector using the **official OpenTelemetry Go SDK**. It parses JSON logs, handles various timestamp formats, can extract JSON from logs with prefixes, and can capture both stdout and stderr from wrapped processes.
 
 ## Features
 
