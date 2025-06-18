@@ -23,7 +23,7 @@ import (
 	"go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 )
 
 var (
@@ -281,14 +281,11 @@ func (p *LogProcessor) ProcessLogEntry(ctx context.Context, entry *LogEntry) {
 	}
 
 	// Add standard attributes
-	attrs = append(attrs,
-		log.String("log.level", entry.Level),
-		log.String("raw_log", entry.Raw),
-	)
+	attrs = append(attrs, log.KeyValueFromAttribute(semconv.LogRecordOriginal(entry.Raw)))
 
 	// Add stream information if available
 	if entry.Stream != "" {
-		attrs = append(attrs, log.String("stream", entry.Stream))
+		attrs = append(attrs, log.KeyValueFromAttribute(semconv.LogIostreamKey.String(entry.Stream)))
 	}
 
 	record.AddAttributes(attrs...)
