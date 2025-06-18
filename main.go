@@ -118,7 +118,7 @@ type LogEntry struct {
 	Timestamp time.Time
 	Level     string
 	Message   string
-	Fields    map[string]interface{}
+	Fields    map[string]any
 	Raw       string
 	Stream    string // stdout, stderr, or empty for stdin
 }
@@ -174,7 +174,7 @@ func (je *JSONExtractor) ExtractJSON(line string) string {
 
 func (je *JSONExtractor) ParseLogEntry(line string) (*LogEntry, error) {
 	entry := &LogEntry{
-		Fields: make(map[string]interface{}),
+		Fields: make(map[string]any),
 		Raw:    line,
 	}
 
@@ -182,7 +182,7 @@ func (je *JSONExtractor) ParseLogEntry(line string) (*LogEntry, error) {
 	jsonStr := je.ExtractJSON(line)
 
 	// Try to parse as JSON
-	var jsonData map[string]interface{}
+	var jsonData map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &jsonData); err != nil {
 		// If JSON parsing fails, treat the entire line as a message
 		entry.Message = strings.TrimSpace(line)
@@ -500,7 +500,7 @@ func executeCommand(ctx context.Context, config *Config, extractor *JSONExtracto
 		Timestamp: time.Now(),
 		Level:     "info",
 		Message:   fmt.Sprintf("Command completed with exit code %d", exitCode),
-		Fields: map[string]interface{}{
+		Fields: map[string]any{
 			"command":     strings.Join(config.Command, " "),
 			"exit_code":   exitCode,
 			"exit_status": cmdErr != nil,
