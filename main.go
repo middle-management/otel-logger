@@ -20,7 +20,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/log"
-	"go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
@@ -34,13 +33,9 @@ var (
 
 // Config holds all command-line arguments
 type Config struct {
-	Endpoint        string        `arg:"-e,--endpoint" default:"localhost:4317" help:"OpenTelemetry collector endpoint"`
-	Protocol        string        `arg:"-p,--protocol" default:"grpc" help:"Protocol to use (grpc or http)"`
 	ServiceName     string        `arg:"--service-name" default:"otel-logger" help:"Service name for telemetry"`
 	ServiceVersion  string        `arg:"--service-version" default:"1.0.0" help:"Service version for telemetry"`
-	Insecure        bool          `arg:"--insecure" help:"Use insecure connection"`
 	Timeout         time.Duration `arg:"--timeout" default:"10s" help:"Request timeout"`
-	Headers         []string      `arg:"--header,separate" help:"Additional headers (key=value)"`
 	JSONPrefix      string        `arg:"--json-prefix" help:"Regex pattern to extract JSON from prefixed logs"`
 	BatchSize       int           `arg:"--batch-size" default:"50" help:"Number of log entries to batch before sending"`
 	FlushInterval   time.Duration `arg:"--flush-interval" default:"5s" help:"Interval to flush batched logs"`
@@ -325,75 +320,38 @@ func createLoggerProvider(ctx context.Context, config *Config) (*sdklog.LoggerPr
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
+	protocol := "http/protobuf"
+	if proto, ok := os.LookupEnv("OTEL_EXPORTER_LOGS_PROTOCOL"); ok {
+		protocol = proto
+	} else if proto, ok := os.LookupEnv("OTEL_EXPORTER_PROTOCOL"); ok {
+		protocol = proto
+	}
+
 	// Create exporter based on protocol
 	var exporter sdklog.Exporter
-	switch strings.ToLower(config.Protocol) {
+	switch strings.ToLower(protocol) {
 	case "grpc":
-		opts := []otlploggrpc.Option{
-			otlploggrpc.WithEndpoint(config.Endpoint),
-			otlploggrpc.WithTimeout(config.Timeout),
-		}
-
-		if config.Insecure {
-			opts = append(opts, otlploggrpc.WithInsecure())
-		}
-
-		// Add headers if provided
-		if len(config.Headers) > 0 {
-			headerMap := make(map[string]string)
-			for _, header := range config.Headers {
-				parts := strings.SplitN(header, "=", 2)
-				if len(parts) == 2 {
-					headerMap[parts[0]] = parts[1]
-				}
-			}
-			opts = append(opts, otlploggrpc.WithHeaders(headerMap))
-		}
-
-		exporter, err = otlploggrpc.New(ctx, opts...)
+		exporter, err = otlploggrpc.New(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create gRPC exporter: %w", err)
 		}
 
-	case "http":
-		opts := []otlploghttp.Option{
-			otlploghttp.WithEndpoint(config.Endpoint),
-			otlploghttp.WithTimeout(config.Timeout),
-		}
-
-		if config.Insecure {
-			opts = append(opts, otlploghttp.WithInsecure())
-		}
-
-		// Add headers if provided
-		if len(config.Headers) > 0 {
-			headerMap := make(map[string]string)
-			for _, header := range config.Headers {
-				parts := strings.SplitN(header, "=", 2)
-				if len(parts) == 2 {
-					headerMap[parts[0]] = parts[1]
-				}
-			}
-			opts = append(opts, otlploghttp.WithHeaders(headerMap))
-		}
-
-		exporter, err = otlploghttp.New(ctx, opts...)
+	case "http", "http/protobuf", "http/json":
+		exporter, err = otlploghttp.New(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP exporter: %w", err)
 		}
 
 	default:
-		return nil, fmt.Errorf("unsupported protocol: %s (supported: grpc, http)", config.Protocol)
+		return nil, fmt.Errorf("unsupported protocol (supported: grpc, http/protobuf, http/json): %s", protocol)
 	}
 
 	// Create processor with batching configuration
-	processorOpts := []sdklog.BatchProcessorOption{
+	processor := sdklog.NewBatchProcessor(exporter,
 		sdklog.WithExportMaxBatchSize(config.BatchSize),
 		sdklog.WithExportInterval(config.FlushInterval),
 		sdklog.WithExportTimeout(config.Timeout),
-	}
-
-	processor := sdklog.NewBatchProcessor(exporter, processorOpts...)
+	)
 
 	// Create logger provider
 	provider := sdklog.NewLoggerProvider(
@@ -490,6 +448,8 @@ func executeCommand(ctx context.Context, config *Config, extractor *JSONExtracto
 		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
+	cmd.Stdin = os.Stdin
+
 	// Start the command
 	fmt.Fprintf(os.Stderr, "Starting command: %s\n", strings.Join(config.Command, " "))
 	if err := cmd.Start(); err != nil {
@@ -575,9 +535,6 @@ func runCommand(config *Config) error {
 		}
 	}()
 
-	// Set global logger provider
-	global.SetLoggerProvider(provider)
-
 	// Create logger and processor
 	logger := provider.Logger("otel-logger")
 	processor := NewLogProcessor(logger)
@@ -615,11 +572,11 @@ func runCommand(config *Config) error {
 	// Check if we should execute a command or read from stdin
 	if len(config.Command) > 0 {
 		// Execute command and process its output
-		fmt.Fprintf(os.Stderr, "Executing command and sending logs to %s://%s (batch_size=%d)\n", config.Protocol, config.Endpoint, config.BatchSize)
+		fmt.Fprintf(os.Stderr, "Executing command and sending logs (batch_size=%d)\n", config.BatchSize)
 		processingErr = executeCommand(ctx, config, extractor, processor)
 	} else {
 		// Process logs from stdin
-		fmt.Fprintf(os.Stderr, "Reading logs from stdin and sending to %s://%s (batch_size=%d)\n", config.Protocol, config.Endpoint, config.BatchSize)
+		fmt.Fprintf(os.Stderr, "Reading logs from stdin and sending (batch_size=%d)\n", config.BatchSize)
 		processingErr = processLogs(ctx, extractor, processor)
 	}
 
