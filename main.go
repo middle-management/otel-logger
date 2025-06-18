@@ -27,7 +27,6 @@ import (
 
 var (
 	version   = "dev"
-	buildTime = "unknown"
 	gitCommit = "unknown"
 )
 
@@ -47,7 +46,7 @@ type Config struct {
 }
 
 func (Config) Version() string {
-	return fmt.Sprintf("otel-logger %s (built: %s, commit: %s)", version, buildTime, gitCommit)
+	return fmt.Sprintf("otel-logger %s (commit: %s)", version, gitCommit)
 }
 
 func (Config) Description() string {
