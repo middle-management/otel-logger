@@ -16,7 +16,7 @@ services:
     volumes:
       - ../otel-logger:/usr/local/bin/otel-logger:ro
     environment:
-      - OTEL_EXPORTER_OTLP_ENDPOINT=collector:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
       - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
       - OTEL_SERVICE_NAME=sample-application
     depends_on:
@@ -42,7 +42,7 @@ services:
     volumes:
       - ../otel-logger:/usr/local/bin/otel-logger:ro
     environment:
-      - OTEL_EXPORTER_OTLP_ENDPOINT=collector:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318
       - OTEL_SERVICE_NAME=sample-application
     depends_on:
       collector:
@@ -54,13 +54,13 @@ services:
       --message-fields message,msg
       --
       sh -c '
-        echo \"Starting JSON application...\";
-        for i in \$$(seq 1 10); do
-          echo \"{\\\"ts\\\":\\\"\$$(date -Iseconds)\\\",\\\"level\\\":\\\"info\\\",\\\"message\\\":\\\"Processing item $$i\\\",\\\"item_id\\\":$$i}\";
-          echo \"{\\\"timestamp\\\":\\\"\$$(date -Iseconds)\\\",\\\"severity\\\":\\\"warn\\\",\\\"msg\\\":\\\"Warning for item $$i\\\",\\\"item_id\\\":$$i}\" >&2;
+        echo "Starting JSON application...";
+        for i in $$(seq 1 10); do
+          echo "{\"ts\":\"$$(date -Iseconds)\",\"level\":\"info\",\"message\":\"Processing item $$i\",\"item_id\":$$i}";
+          echo "{\"timestamp\":\"$$(date -Iseconds)\",\"severity\":\"warn\",\"msg\":\"Warning for item $$i\",\"item_id\":$$i}" >&2;
           sleep 2;
         done;
-        echo \"JSON application completed\";
+        echo "JSON application completed";
       '
 
   # Traditional application that outputs plain text logs
@@ -72,19 +72,19 @@ services:
       collector:
         condition: service_healthy
     environment:
-      - OTEL_EXPORTER_OTLP_ENDPOINT=collector:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318
       - OTEL_SERVICE_NAME=text-logger
     command: >-
       /usr/local/bin/otel-logger
       --json-prefix '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[Z0-9:+-]*\s*'
       --
       sh -c '
-        echo \"Starting text application...\";
-        for i in \$$(seq 1 5); do
-          echo \"\$$(date -Iseconds) INFO: Processing request $$i\";
-          echo \"\$$(date -Iseconds) ERROR: Simulated error for request $$i\" >&2;
-          echo \"\$$(date -Iseconds) {\\\"level\\\":\\\"debug\\\",\\\"message\\\":\\\"Mixed format log\\\",\\\"request_id\\\":$$i}\";
+        echo "Starting text application...";
+        for i in $$(seq 1 5); do
+          echo "$$(date -Iseconds) INFO: Processing request $$i";
+          echo "$$(date -Iseconds) ERROR: Simulated error for request $$i" >&2;
+          echo "$$(date -Iseconds) {\"level\":\"debug\",\"message\":\"Mixed format log\",\"request_id\":$$i}";
           sleep 3;
         done;
-        echo \"Text application completed\";
+        echo "Text application completed";
       '
