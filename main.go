@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	stdlog "log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -31,15 +30,16 @@ var (
 
 // Config holds all command-line arguments
 type Config struct {
-	Timeout         time.Duration `arg:"--timeout" default:"10s" help:"Request timeout"`
-	JSONPrefix      string        `arg:"--json-prefix" help:"Regex pattern to extract JSON from prefixed logs"`
-	BatchSize       int           `arg:"--batch-size" default:"50" help:"Number of log entries to batch before sending"`
-	FlushInterval   time.Duration `arg:"--flush-interval" default:"5s" help:"Interval to flush batched logs"`
-	TimestampFields []string      `arg:"--timestamp-fields,separate" help:"JSON field names for timestamps (default: timestamp,ts,time,@timestamp)"`
-	LevelFields     []string      `arg:"--level-fields,separate" help:"JSON field names for log levels (default: level,lvl,severity,priority)"`
-	MessageFields   []string      `arg:"--message-fields,separate" help:"JSON field names for log messages (default: message,msg,text,content)"`
-	ShowVersion     bool          `arg:"--version" help:"Show version information"`
-	Command         []string      `arg:"positional" help:"Command to execute and capture logs from (if not provided, reads from stdin)"`
+	Timeout           time.Duration `arg:"--timeout" default:"10s" help:"Request timeout"`
+	JSONPrefix        string        `arg:"--json-prefix" help:"Regex pattern to extract JSON from prefixed logs"`
+	BatchSize         int           `arg:"--batch-size" default:"50" help:"Number of log entries to batch before sending"`
+	FlushInterval     time.Duration `arg:"--flush-interval" default:"5s" help:"Interval to flush batched logs"`
+	TimestampFields   []string      `arg:"--timestamp-fields,separate" help:"JSON field names for timestamps (default: timestamp,ts,time,@timestamp)"`
+	LevelFields       []string      `arg:"--level-fields,separate" help:"JSON field names for log levels (default: level,lvl,severity,priority)"`
+	MessageFields     []string      `arg:"--message-fields,separate" help:"JSON field names for log messages (default: message,msg,text,content)"`
+	PassthroughStdout bool          `arg:"--passthrough-stdout" help:"Pass command stdout to our stdout in addition to logging"`
+	PassthroughStderr bool          `arg:"--passthrough-stderr" help:"Pass command stderr to our stderr in addition to logging"`
+	Command           []string      `arg:"positional" help:"Command to execute and capture logs from (if not provided, reads from stdin)"`
 }
 
 func (Config) Version() string {
@@ -52,10 +52,9 @@ It can handle JSON logs as well as partial JSON with prefixes like timestamps.
 Field mappings are configurable to support different logging frameworks.
 
 Configuration uses standard OpenTelemetry environment variables:
-  OTEL_EXPORTER_OTLP_ENDPOINT     - Collector endpoint (default: http://localhost:4317)
-  OTEL_EXPORTER_OTLP_PROTOCOL     - Protocol: grpc, http/protobuf, http/json (default: grpc)
+  OTEL_EXPORTER_OTLP_ENDPOINT     - Collector endpoint (default: http://localhost:4318)
+  OTEL_EXPORTER_OTLP_PROTOCOL     - Protocol: grpc, http/protobuf, http/json (default: http/protobuf)
   OTEL_SERVICE_NAME               - Service name (default: otel-logger)
-  OTEL_SERVICE_VERSION            - Service version (default: 1.0.0)
   OTEL_EXPORTER_OTLP_INSECURE     - Use insecure connection (default: false)
   OTEL_EXPORTER_OTLP_HEADERS      - Additional headers (comma-separated key=value)
 
@@ -390,7 +389,7 @@ func processLogs(ctx context.Context, extractor *JSONExtractor, processor *LogPr
 }
 
 // processStream processes logs from a single stream (stdout or stderr)
-func processStream(ctx context.Context, reader io.Reader, stream string, extractor *JSONExtractor, processor *LogProcessor, wg *sync.WaitGroup) {
+func processStream(ctx context.Context, reader io.Reader, stream string, extractor *JSONExtractor, processor *LogProcessor, wg *sync.WaitGroup, passthrough bool, output io.Writer) {
 	defer wg.Done()
 
 	scanner := bufio.NewScanner(reader)
@@ -398,6 +397,11 @@ func processStream(ctx context.Context, reader io.Reader, stream string, extract
 		line := scanner.Text()
 		if line == "" {
 			continue
+		}
+
+		// If passthrough is enabled, write to output
+		if passthrough && output != nil {
+			fmt.Fprintln(output, line)
 		}
 
 		entry, err := extractor.ParseLogEntry(line)
@@ -454,8 +458,8 @@ func executeCommand(ctx context.Context, config *Config, extractor *JSONExtracto
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	go processStream(ctx, stdoutPipe, "stdout", extractor, processor, &wg)
-	go processStream(ctx, stderrPipe, "stderr", extractor, processor, &wg)
+	go processStream(ctx, stdoutPipe, "stdout", extractor, processor, &wg, config.PassthroughStdout, os.Stdout)
+	go processStream(ctx, stderrPipe, "stderr", extractor, processor, &wg, config.PassthroughStderr, os.Stderr)
 
 	// Set up signal forwarding
 	sigChan := make(chan os.Signal, 1)
@@ -534,25 +538,15 @@ func runCommand(config *Config) error {
 	processor := NewLogProcessor(logger)
 
 	// Create field mappings
-	var fieldMappings *FieldMappings
-	if len(config.TimestampFields) > 0 || len(config.LevelFields) > 0 || len(config.MessageFields) > 0 {
-		fieldMappings = &FieldMappings{
-			TimestampFields: config.TimestampFields,
-			LevelFields:     config.LevelFields,
-			MessageFields:   config.MessageFields,
-		}
-		// Use defaults for any empty fields
-		if len(fieldMappings.TimestampFields) == 0 {
-			fieldMappings.TimestampFields = getDefaultFieldMappings().TimestampFields
-		}
-		if len(fieldMappings.LevelFields) == 0 {
-			fieldMappings.LevelFields = getDefaultFieldMappings().LevelFields
-		}
-		if len(fieldMappings.MessageFields) == 0 {
-			fieldMappings.MessageFields = getDefaultFieldMappings().MessageFields
-		}
-	} else {
-		fieldMappings = getDefaultFieldMappings()
+	fieldMappings := getDefaultFieldMappings()
+	if len(config.TimestampFields) > 0 {
+		fieldMappings.TimestampFields = config.TimestampFields
+	}
+	if len(config.MessageFields) > 0 {
+		fieldMappings.MessageFields = config.MessageFields
+	}
+	if len(config.LevelFields) > 0 {
+		fieldMappings.LevelFields = config.LevelFields
 	}
 
 	// Create JSON extractor
@@ -592,12 +586,8 @@ func main() {
 	var config Config
 	arg.MustParse(&config)
 
-	if config.ShowVersion {
-		fmt.Println(config.Version())
-		return
-	}
-
 	if err := runCommand(&config); err != nil {
-		stdlog.Fatal(err)
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
 	}
 }
