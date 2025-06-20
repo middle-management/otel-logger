@@ -41,6 +41,7 @@ type Config struct {
 	MessageFields     []string      `arg:"--message-fields,separate" help:"JSON field names for log messages (default: message,msg,text,content)"`
 	PassthroughStdout bool          `arg:"--passthrough-stdout" help:"Pass command stdout to our stdout in addition to logging"`
 	PassthroughStderr bool          `arg:"--passthrough-stderr" help:"Pass command stderr to our stderr in addition to logging"`
+	Verbose           bool          `arg:"--verbose,-v" help:"Enable verbose logging output"`
 	Command           []string      `arg:"positional" help:"Command to execute and capture logs from (if not provided, reads from stdin)"`
 }
 
@@ -365,6 +366,23 @@ func getDefaultFieldMappings() *FieldMappings {
 	}
 }
 
+// Logging helper functions
+func logInfo(verbose bool, format string, args ...interface{}) {
+	if verbose {
+		fmt.Fprintf(os.Stderr, format, args...)
+	}
+}
+
+func logError(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, format, args...)
+}
+
+func logDebug(verbose bool, format string, args ...interface{}) {
+	if verbose {
+		fmt.Fprintf(os.Stderr, format, args...)
+	}
+}
+
 // multilineLogIterator creates an iterator that combines multiline log entries
 // based on improved heuristics for detecting log entry starts
 func multilineLogIterator(reader io.Reader) iter.Seq[string] {
@@ -451,11 +469,11 @@ func multilineLogIterator(reader io.Reader) iter.Seq[string] {
 	}
 }
 
-func processLogs(ctx context.Context, extractor *JSONExtractor, processor *LogProcessor) error {
+func processLogs(ctx context.Context, config *Config, extractor *JSONExtractor, processor *LogProcessor) error {
 	for logEntry := range multilineLogIterator(os.Stdin) {
 		entry, err := extractor.ParseLogEntry(logEntry)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing log entry: %v\n", err)
+			logError("Error parsing log entry: %v\n", err)
 			continue
 		}
 
@@ -477,7 +495,7 @@ func processStream(ctx context.Context, reader io.Reader, stream string, extract
 
 		entry, err := extractor.ParseLogEntry(logEntry)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing log entry from %s: %v\n", stream, err)
+			logError("Error parsing log entry from %s: %v\n", stream, err)
 			continue
 		}
 
@@ -516,7 +534,7 @@ func executeCommand(ctx context.Context, config *Config, extractor *JSONExtracto
 	cmd.Stdin = os.Stdin
 
 	// Start the command
-	fmt.Fprintf(os.Stderr, "Starting command: %s\n", strings.Join(config.Command, " "))
+	logInfo(config.Verbose, "Starting command: %s\n", strings.Join(config.Command, " "))
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start command: %w", err)
 	}
@@ -541,7 +559,7 @@ func executeCommand(ctx context.Context, config *Config, extractor *JSONExtracto
 	var cmdErr error
 	select {
 	case sig := <-sigChan:
-		fmt.Fprintf(os.Stderr, "Received signal %v, forwarding to process...\n", sig)
+		logInfo(config.Verbose, "Received signal %v, forwarding to process...\n", sig)
 		if cmd.Process != nil {
 			cmd.Process.Signal(sig)
 		}
@@ -577,7 +595,7 @@ func executeCommand(ctx context.Context, config *Config, extractor *JSONExtracto
 
 	processor.ProcessLogEntry(ctx, exitEntry)
 
-	fmt.Fprintf(os.Stderr, "Command completed with exit code: %d\n", exitCode)
+	logInfo(config.Verbose, "Command completed with exit code: %d\n", exitCode)
 
 	if cmdErr != nil && exitCode != 0 {
 		return fmt.Errorf("command failed with exit code %d", exitCode)
@@ -596,7 +614,7 @@ func runCommand(config *Config) error {
 	}
 	defer func() {
 		if err := provider.Shutdown(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "Error shutting down logger provider: %v\n", err)
+			logError("Error shutting down logger provider: %v\n", err)
 		}
 	}()
 
@@ -619,7 +637,7 @@ func runCommand(config *Config) error {
 	// Create JSON extractor
 	extractor := NewJSONExtractor(config.JSONPrefix, fieldMappings)
 
-	fmt.Fprintf(os.Stderr, "Field mappings - Timestamp: %v, Level: %v, Message: %v\n",
+	logInfo(config.Verbose, "Field mappings - Timestamp: %v, Level: %v, Message: %v\n",
 		fieldMappings.TimestampFields, fieldMappings.LevelFields, fieldMappings.MessageFields)
 
 	var processingErr error
@@ -627,12 +645,12 @@ func runCommand(config *Config) error {
 	// Check if we should execute a command or read from stdin
 	if len(config.Command) > 0 {
 		// Execute command and process its output
-		fmt.Fprintf(os.Stderr, "Executing command and sending logs (batch_size=%d)\n", config.BatchSize)
+		logInfo(config.Verbose, "Executing command and sending logs (batch_size=%d)\n", config.BatchSize)
 		processingErr = executeCommand(ctx, config, extractor, processor)
 	} else {
 		// Process logs from stdin
-		fmt.Fprintf(os.Stderr, "Reading logs from stdin and sending (batch_size=%d)\n", config.BatchSize)
-		processingErr = processLogs(ctx, extractor, processor)
+		logInfo(config.Verbose, "Reading logs from stdin and sending (batch_size=%d)\n", config.BatchSize)
+		processingErr = processLogs(ctx, config, extractor, processor)
 	}
 
 	// Force flush before exit
@@ -640,7 +658,7 @@ func runCommand(config *Config) error {
 		return fmt.Errorf("failed to flush logs: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Finished processing logs and flushed to collector\n")
+	logInfo(config.Verbose, "Finished processing logs and flushed to collector\n")
 
 	if processingErr != nil {
 		return processingErr
@@ -654,7 +672,7 @@ func main() {
 	arg.MustParse(&config)
 
 	if err := runCommand(&config); err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
+		logError("%s\n", err.Error())
 		os.Exit(1)
 	}
 }
