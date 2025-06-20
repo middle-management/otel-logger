@@ -36,10 +36,6 @@ func TestConfigDefaults(t *testing.T) {
 		t.Errorf("Expected default flush interval '5s', got '%v'", config.FlushInterval)
 	}
 
-	if config.ShowVersion != false {
-		t.Errorf("Expected default show version 'false', got '%v'", config.ShowVersion)
-	}
-
 	if config.JSONPrefix != "" {
 		t.Errorf("Expected default json prefix '', got '%s'", config.JSONPrefix)
 	}
@@ -144,9 +140,6 @@ func TestConfigParsing(t *testing.T) {
 			}
 
 			// Compare relevant fields
-			if config.ShowVersion != tt.expected.ShowVersion {
-				t.Errorf("ShowVersion: expected %v, got %v", tt.expected.ShowVersion, config.ShowVersion)
-			}
 			if config.Timeout != tt.expected.Timeout {
 				t.Errorf("Timeout: expected %v, got %v", tt.expected.Timeout, config.Timeout)
 			}

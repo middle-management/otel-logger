@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/alexflint/go-arg"
+
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/log"
@@ -363,26 +365,101 @@ func getDefaultFieldMappings() *FieldMappings {
 	}
 }
 
-func processLogs(ctx context.Context, extractor *JSONExtractor, processor *LogProcessor) error {
-	scanner := bufio.NewScanner(os.Stdin)
+// multilineLogIterator creates an iterator that combines multiline log entries
+// based on improved heuristics for detecting log entry starts
+func multilineLogIterator(reader io.Reader) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		scanner := bufio.NewScanner(reader)
+		var currentEntry strings.Builder
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
+		// Regex patterns for common log entry starts
+		logStartPatterns := []*regexp.Regexp{
+			// ISO timestamp patterns
+			regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}`),
+			// Common timestamp formats
+			regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}`),
+			regexp.MustCompile(`^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}`),
+			// Log level at start
+			regexp.MustCompile(`^(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC)\b`),
+			// Bracketed timestamp or level
+			regexp.MustCompile(`^\[[\d\-T: ]+\]`),
+			// JSON log entries
+			regexp.MustCompile(`^\s*\{.*"(timestamp|time|level|message|msg)`),
 		}
 
-		entry, err := extractor.ParseLogEntry(line)
+		isLogEntryStart := func(line string) bool {
+			// Empty lines are not log starts
+			if len(line) == 0 {
+				return false
+			}
+
+			// Lines starting with whitespace are usually continuations
+			if line[0] == ' ' || line[0] == '\t' {
+				return false
+			}
+
+			// Check if line matches any log entry start pattern
+			for _, pattern := range logStartPatterns {
+				if pattern.MatchString(line) {
+					return true
+				}
+			}
+
+			// If no pattern matches but line doesn't start with whitespace,
+			// treat as potential log start only if it looks structured
+			// (contains common separators that suggest it's a log entry)
+			if strings.Contains(line, ":") || strings.Contains(line, " - ") ||
+				strings.Contains(line, " | ") || strings.Contains(line, "=") {
+				return true
+			}
+
+			return false
+		}
+
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// Skip completely empty lines
+			if len(line) == 0 {
+				continue
+			}
+
+			// Check if this line starts a new log entry
+			if isLogEntryStart(line) {
+				// If we have a current entry, yield it first
+				if currentEntry.Len() > 0 {
+					if !yield(currentEntry.String()) {
+						return
+					}
+					currentEntry.Reset()
+				}
+				// Start new entry
+				currentEntry.WriteString(line)
+			} else if currentEntry.Len() > 0 {
+				// This is a continuation line and we have an active entry, append to it
+				currentEntry.WriteString("\n")
+				currentEntry.WriteString(line)
+			}
+			// If currentEntry.Len() == 0 and line is not a log start,
+			// we ignore it as it's likely orphaned continuation
+		}
+
+		// Yield the final entry if we have one
+		if currentEntry.Len() > 0 {
+			yield(currentEntry.String())
+		}
+	}
+}
+
+func processLogs(ctx context.Context, extractor *JSONExtractor, processor *LogProcessor) error {
+	for logEntry := range multilineLogIterator(os.Stdin) {
+		entry, err := extractor.ParseLogEntry(logEntry)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error parsing log entry: %v\n", err)
 			continue
 		}
 
 		processor.ProcessLogEntry(ctx, entry)
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading from stdin: %w", err)
 	}
 
 	return nil
@@ -392,19 +469,13 @@ func processLogs(ctx context.Context, extractor *JSONExtractor, processor *LogPr
 func processStream(ctx context.Context, reader io.Reader, stream string, extractor *JSONExtractor, processor *LogProcessor, wg *sync.WaitGroup, passthrough bool, output io.Writer) {
 	defer wg.Done()
 
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
+	for logEntry := range multilineLogIterator(reader) {
 		// If passthrough is enabled, write to output
 		if passthrough && output != nil {
-			fmt.Fprintln(output, line)
+			fmt.Fprintln(output, logEntry)
 		}
 
-		entry, err := extractor.ParseLogEntry(line)
+		entry, err := extractor.ParseLogEntry(logEntry)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error parsing log entry from %s: %v\n", stream, err)
 			continue
@@ -414,10 +485,6 @@ func processStream(ctx context.Context, reader io.Reader, stream string, extract
 		entry.Stream = stream
 
 		processor.ProcessLogEntry(ctx, entry)
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading from %s: %v\n", stream, err)
 	}
 }
 
