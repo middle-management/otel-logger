@@ -54,12 +54,7 @@ func (Config) Description() string {
 It can handle JSON logs as well as partial JSON with prefixes like timestamps.
 Field mappings are configurable to support different logging frameworks.
 
-Configuration uses standard OpenTelemetry environment variables:
-  OTEL_EXPORTER_OTLP_ENDPOINT     - Collector endpoint (default: http://localhost:4318)
-  OTEL_EXPORTER_OTLP_PROTOCOL     - Protocol: grpc, http/protobuf, http/json (default: http/protobuf)
-  OTEL_SERVICE_NAME               - Service name (default: otel-logger)
-  OTEL_EXPORTER_OTLP_INSECURE     - Use insecure connection (default: false)
-  OTEL_EXPORTER_OTLP_HEADERS      - Additional headers (comma-separated key=value)
+Configuration uses standard OpenTelemetry environment variables.
 
 Examples:
   # Read from stdin and send JSON logs via gRPC (uses default field mappings)
@@ -367,17 +362,17 @@ func getDefaultFieldMappings() *FieldMappings {
 }
 
 // Logging helper functions
-func logInfo(verbose bool, format string, args ...interface{}) {
+func logInfo(verbose bool, format string, args ...any) {
 	if verbose {
 		fmt.Fprintf(os.Stderr, format, args...)
 	}
 }
 
-func logError(format string, args ...interface{}) {
+func logError(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format, args...)
 }
 
-func logDebug(verbose bool, format string, args ...interface{}) {
+func logDebug(verbose bool, format string, args ...any) {
 	if verbose {
 		fmt.Fprintf(os.Stderr, format, args...)
 	}
