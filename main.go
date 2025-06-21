@@ -280,7 +280,18 @@ func (p *LogProcessor) ProcessLogEntry(ctx context.Context, entry *LogEntry) {
 	// Add attributes from parsed fields
 	attrs := make([]log.KeyValue, 0, len(entry.Fields)+3)
 	for key, value := range entry.Fields {
-		attrs = append(attrs, log.String(key, fmt.Sprintf("%v", value)))
+		var valueStr string
+		switch v := value.(type) {
+		case map[string]any, []any:
+			if jsonBytes, err := json.Marshal(v); err == nil {
+				valueStr = string(jsonBytes)
+			} else {
+				valueStr = fmt.Sprintf("%v", v)
+			}
+		default:
+			valueStr = fmt.Sprintf("%v", v)
+		}
+		attrs = append(attrs, log.String(key, valueStr))
 	}
 
 	// Add standard attributes
