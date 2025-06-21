@@ -32,17 +32,18 @@ var (
 
 // Config holds all command-line arguments
 type Config struct {
-	Timeout           time.Duration `arg:"--timeout" default:"10s" help:"Request timeout"`
-	JSONPrefix        string        `arg:"--json-prefix" help:"Regex pattern to extract JSON from prefixed logs"`
-	BatchSize         int           `arg:"--batch-size" default:"50" help:"Number of log entries to batch before sending"`
-	FlushInterval     time.Duration `arg:"--flush-interval" default:"5s" help:"Interval to flush batched logs"`
-	TimestampFields   []string      `arg:"--timestamp-fields,separate" help:"JSON field names for timestamps (default: timestamp,ts,time,@timestamp)"`
-	LevelFields       []string      `arg:"--level-fields,separate" help:"JSON field names for log levels (default: level,lvl,severity,priority)"`
-	MessageFields     []string      `arg:"--message-fields,separate" help:"JSON field names for log messages (default: message,msg,text,content)"`
-	PassthroughStdout bool          `arg:"--passthrough-stdout" help:"Pass command stdout to our stdout in addition to logging"`
-	PassthroughStderr bool          `arg:"--passthrough-stderr" help:"Pass command stderr to our stderr in addition to logging"`
-	Verbose           bool          `arg:"--verbose,-v" help:"Enable verbose logging output"`
-	Command           []string      `arg:"positional" help:"Command to execute and capture logs from (if not provided, reads from stdin)"`
+	Timeout             time.Duration `arg:"--timeout" default:"10s" help:"Request timeout"`
+	JSONPrefix          string        `arg:"--json-prefix" help:"Regex pattern to extract JSON from prefixed logs"`
+	BatchSize           int           `arg:"--batch-size" default:"50" help:"Number of log entries to batch before sending"`
+	FlushInterval       time.Duration `arg:"--flush-interval" default:"5s" help:"Interval to flush batched logs"`
+	TimestampFields     []string      `arg:"--timestamp-fields,separate" help:"JSON field names for timestamps (default: timestamp,ts,time,@timestamp)"`
+	LevelFields         []string      `arg:"--level-fields,separate" help:"JSON field names for log levels (default: level,lvl,severity,priority)"`
+	MessageFields       []string      `arg:"--message-fields,separate" help:"JSON field names for log messages (default: message,msg,text,content)"`
+	PassthroughStdout   bool          `arg:"--passthrough-stdout" help:"Pass command stdout to our stdout in addition to logging"`
+	PassthroughStderr   bool          `arg:"--passthrough-stderr" help:"Pass command stderr to our stderr in addition to logging"`
+	Verbose             bool          `arg:"--verbose,-v" help:"Enable verbose logging output"`
+	ContinuationPattern string        `arg:"--continuation-pattern" default:"^[ \\t]" help:"Regex pattern for continuation lines (default: lines starting with whitespace)"`
+	Command             []string      `arg:"positional" help:"Command to execute and capture logs from (if not provided, reads from stdin)"`
 }
 
 func (Config) Version() string {
@@ -380,54 +381,25 @@ func logDebug(verbose bool, format string, args ...any) {
 
 // multilineLogIterator creates an iterator that combines multiline log entries
 // based on improved heuristics for detecting log entry starts
-func multilineLogIterator(reader io.Reader) iter.Seq[string] {
+func multilineLogIterator(reader io.Reader, continuationPattern *regexp.Regexp) iter.Seq[string] {
+
+	isLogEntryStart := func(line string) bool {
+		// Empty lines are not log starts
+		if len(line) == 0 {
+			return false
+		}
+
+		// Lines starting with whitespace are usually continuations
+		if continuationPattern.MatchString(line) {
+			return false
+		}
+
+		return true
+	}
+
 	return func(yield func(string) bool) {
 		scanner := bufio.NewScanner(reader)
 		var currentEntry strings.Builder
-
-		// Regex patterns for common log entry starts
-		logStartPatterns := []*regexp.Regexp{
-			// ISO timestamp patterns
-			regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}`),
-			// Common timestamp formats
-			regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}`),
-			regexp.MustCompile(`^\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}`),
-			// Log level at start
-			regexp.MustCompile(`^(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC)\b`),
-			// Bracketed timestamp or level
-			regexp.MustCompile(`^\[[\d\-T: ]+\]`),
-			// JSON log entries
-			regexp.MustCompile(`^\s*\{.*"(timestamp|time|level|message|msg)`),
-		}
-
-		isLogEntryStart := func(line string) bool {
-			// Empty lines are not log starts
-			if len(line) == 0 {
-				return false
-			}
-
-			// Lines starting with whitespace are usually continuations
-			if line[0] == ' ' || line[0] == '\t' {
-				return false
-			}
-
-			// Check if line matches any log entry start pattern
-			for _, pattern := range logStartPatterns {
-				if pattern.MatchString(line) {
-					return true
-				}
-			}
-
-			// If no pattern matches but line doesn't start with whitespace,
-			// treat as potential log start only if it looks structured
-			// (contains common separators that suggest it's a log entry)
-			if strings.Contains(line, ":") || strings.Contains(line, " - ") ||
-				strings.Contains(line, " | ") || strings.Contains(line, "=") {
-				return true
-			}
-
-			return false
-		}
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -465,7 +437,12 @@ func multilineLogIterator(reader io.Reader) iter.Seq[string] {
 }
 
 func processLogs(ctx context.Context, config *Config, extractor *JSONExtractor, processor *LogProcessor) error {
-	for logEntry := range multilineLogIterator(os.Stdin) {
+	continuationPattern, err := regexp.Compile(config.ContinuationPattern)
+	if err != nil {
+		return fmt.Errorf("failed to compile continuation pattern: %w", err)
+	}
+
+	for logEntry := range multilineLogIterator(os.Stdin, continuationPattern) {
 		entry, err := extractor.ParseLogEntry(logEntry)
 		if err != nil {
 			logError("Error parsing log entry: %v\n", err)
@@ -479,10 +456,10 @@ func processLogs(ctx context.Context, config *Config, extractor *JSONExtractor, 
 }
 
 // processStream processes logs from a single stream (stdout or stderr)
-func processStream(ctx context.Context, reader io.Reader, stream string, extractor *JSONExtractor, processor *LogProcessor, wg *sync.WaitGroup, passthrough bool, output io.Writer) {
+func processStream(ctx context.Context, reader io.Reader, stream string, extractor *JSONExtractor, processor *LogProcessor, wg *sync.WaitGroup, passthrough bool, output io.Writer, continuationPattern *regexp.Regexp) {
 	defer wg.Done()
 
-	for logEntry := range multilineLogIterator(reader) {
+	for logEntry := range multilineLogIterator(reader, continuationPattern) {
 		// If passthrough is enabled, write to output
 		if passthrough && output != nil {
 			fmt.Fprintln(output, logEntry)
@@ -505,6 +482,11 @@ func processStream(ctx context.Context, reader io.Reader, stream string, extract
 func executeCommand(ctx context.Context, config *Config, extractor *JSONExtractor, processor *LogProcessor) error {
 	if len(config.Command) == 0 {
 		return fmt.Errorf("no command specified")
+	}
+
+	continuationPattern, err := regexp.Compile(config.ContinuationPattern)
+	if err != nil {
+		return fmt.Errorf("failed to compile continuation pattern: %w", err)
 	}
 
 	// Create command
@@ -538,8 +520,8 @@ func executeCommand(ctx context.Context, config *Config, extractor *JSONExtracto
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	go processStream(ctx, stdoutPipe, "stdout", extractor, processor, &wg, config.PassthroughStdout, os.Stdout)
-	go processStream(ctx, stderrPipe, "stderr", extractor, processor, &wg, config.PassthroughStderr, os.Stderr)
+	go processStream(ctx, stdoutPipe, "stdout", extractor, processor, &wg, config.PassthroughStdout, os.Stdout, continuationPattern)
+	go processStream(ctx, stderrPipe, "stderr", extractor, processor, &wg, config.PassthroughStderr, os.Stderr, continuationPattern)
 
 	// Set up signal forwarding
 	sigChan := make(chan os.Signal, 1)

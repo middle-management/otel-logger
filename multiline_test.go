@@ -1,9 +1,12 @@
 package main
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
+
+var defaultContinuationPattern = regexp.MustCompile(`^[ \t]`)
 
 func TestMultilineLogIterator(t *testing.T) {
 	tests := []struct {
@@ -137,7 +140,7 @@ func TestMultilineLogIterator(t *testing.T) {
 			reader := strings.NewReader(tt.input)
 			var results []string
 
-			for logEntry := range multilineLogIterator(reader) {
+			for logEntry := range multilineLogIterator(reader, defaultContinuationPattern) {
 				results = append(results, logEntry)
 			}
 
@@ -171,7 +174,7 @@ func TestMultilineLogIteratorEarlyExit(t *testing.T) {
 	var results []string
 	count := 0
 
-	for logEntry := range multilineLogIterator(reader) {
+	for logEntry := range multilineLogIterator(reader, defaultContinuationPattern) {
 		results = append(results, logEntry)
 		count++
 		if count >= 2 {
@@ -218,7 +221,7 @@ func BenchmarkMultilineLogIterator(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		reader := strings.NewReader(input)
-		for range multilineLogIterator(reader) {
+		for range multilineLogIterator(reader, defaultContinuationPattern) {
 			// Process each log entry
 		}
 	}
