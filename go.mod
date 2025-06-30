@@ -6,21 +6,21 @@ toolchain go1.23.10
 
 require (
 	github.com/alexflint/go-arg v1.5.1
-	go.opentelemetry.io/otel v1.36.0
+	go.opentelemetry.io/otel v1.37.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.12.2
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.12.2
-	go.opentelemetry.io/otel/log v0.12.2
+	go.opentelemetry.io/otel/log v0.13.0
 	go.opentelemetry.io/otel/sdk/log v0.12.2
 )
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.2 // indirect
-	github.com/go-logr/logr v1.4.2 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
-	go.opentelemetry.io/otel/metric v1.36.0 // indirect
-	go.opentelemetry.io/otel/trace v1.36.0 // indirect
+	go.opentelemetry.io/otel/metric v1.37.0 // indirect
+	go.opentelemetry.io/otel/trace v1.37.0 // indirect
 	google.golang.org/grpc v1.72.1 // indirect
 )
 
