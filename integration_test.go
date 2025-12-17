@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -618,4 +621,78 @@ func BenchmarkJSONExtraction(b *testing.B) {
 			b.Fatal("Failed to extract JSON")
 		}
 	}
+}
+
+// TestParallellSortJSON tests parsing of the real PostgreSQL EXPLAIN ANALYZE JSON file
+func TestParallellSortJSON(t *testing.T) {
+	// Read the actual parallellsort.json file
+	content, err := os.ReadFile("examples/parallellsort.json")
+	if err != nil {
+		t.Skipf("Skipping test: %v", err)
+	}
+
+	reader := strings.NewReader(string(content))
+	continuationPattern := regexp.MustCompile(`^[ \t]`)
+
+	var entries []string
+	for logEntry := range multilineLogIterator(reader, continuationPattern) {
+		entries = append(entries, logEntry)
+	}
+
+	// Should be parsed as a single log entry
+	if len(entries) != 1 {
+		t.Errorf("Expected 1 log entry, got %d", len(entries))
+		if len(entries) > 1 {
+			t.Logf("First entry length: %d", len(entries[0]))
+			for i, entry := range entries {
+				t.Logf("Entry %d (first 100 chars): %s", i, entry[:min(100, len(entry))])
+			}
+		}
+		return
+	}
+
+	// Verify it's valid JSON (should be an array)
+	var jsonData []map[string]any
+	if err := json.Unmarshal([]byte(entries[0]), &jsonData); err != nil {
+		t.Errorf("Failed to parse as JSON array: %v", err)
+		t.Logf("First 200 chars of entry: %s", entries[0][:min(200, len(entries[0]))])
+		return
+	}
+
+	// Verify expected structure
+	if len(jsonData) == 0 {
+		t.Error("Expected at least one element in JSON array")
+		return
+	}
+
+	// Check for expected top-level fields in the first element
+	firstElement := jsonData[0]
+
+	if _, ok := firstElement["Plan"]; !ok {
+		t.Error("Expected 'Plan' field in JSON object")
+	}
+
+	if _, ok := firstElement["Execution Time"]; !ok {
+		t.Error("Expected 'Execution Time' field in JSON object")
+	}
+
+	if _, ok := firstElement["Planning Time"]; !ok {
+		t.Error("Expected 'Planning Time' field in JSON object")
+	}
+
+	// Verify the Plan field is a nested structure
+	if plan, ok := firstElement["Plan"].(map[string]any); ok {
+		if nodeType, ok := plan["Node Type"].(string); !ok || nodeType == "" {
+			t.Error("Expected 'Node Type' in Plan object")
+		}
+	} else {
+		t.Error("Expected 'Plan' to be a nested object")
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

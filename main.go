@@ -42,7 +42,7 @@ type Config struct {
 	PassthroughStdout   bool          `arg:"--passthrough-stdout" help:"Pass command stdout to our stdout in addition to logging"`
 	PassthroughStderr   bool          `arg:"--passthrough-stderr" help:"Pass command stderr to our stderr in addition to logging"`
 	Verbose             bool          `arg:"--verbose,-v" help:"Enable verbose logging output"`
-	ContinuationPattern string        `arg:"--continuation-pattern" default:"^[ \\t]" help:"Regex pattern for continuation lines (default: lines starting with whitespace)"`
+	ContinuationPattern string        `arg:"--continuation-pattern" default:"^[ \\t]" help:"Regex pattern for continuation lines (default: lines starting with whitespace; closing brackets ] } are also treated as continuations)"`
 	Command             []string      `arg:"positional" help:"Command to execute and capture logs from (if not provided, reads from stdin)"`
 }
 
@@ -402,6 +402,13 @@ func multilineLogIterator(reader io.Reader, continuationPattern *regexp.Regexp) 
 
 		// Lines starting with whitespace are usually continuations
 		if continuationPattern.MatchString(line) {
+			return false
+		}
+
+		// Lines that are only closing brackets/braces are continuations
+		// This handles JSON arrays and objects that span multiple lines
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "]" || trimmed == "}" || trimmed == "]," || trimmed == "}," {
 			return false
 		}
 

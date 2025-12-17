@@ -133,6 +133,99 @@ func TestMultilineLogIterator(t *testing.T) {
 				`{"timestamp":"2024-01-15T10:30:10Z","level":"DEBUG","message":"Processing user request"}`,
 			},
 		},
+		{
+			name: "json array spanning multiple lines",
+			input: `[
+  {
+    "timestamp": "2024-01-15T10:30:00Z",
+    "level": "INFO",
+    "message": "First entry"
+  },
+  {
+    "timestamp": "2024-01-15T10:30:01Z",
+    "level": "ERROR",
+    "message": "Second entry"
+  }
+]`,
+			expected: []string{
+				"[\n  {\n    \"timestamp\": \"2024-01-15T10:30:00Z\",\n    \"level\": \"INFO\",\n    \"message\": \"First entry\"\n  },\n  {\n    \"timestamp\": \"2024-01-15T10:30:01Z\",\n    \"level\": \"ERROR\",\n    \"message\": \"Second entry\"\n  }\n]",
+			},
+		},
+		{
+			name: "json object spanning multiple lines",
+			input: `{
+  "Plan": {
+    "Node Type": "Limit",
+    "Startup Cost": 258327.9,
+    "Total Cost": 258339.57
+  },
+  "Execution Time": 4725.163
+}`,
+			expected: []string{
+				"{\n  \"Plan\": {\n    \"Node Type\": \"Limit\",\n    \"Startup Cost\": 258327.9,\n    \"Total Cost\": 258339.57\n  },\n  \"Execution Time\": 4725.163\n}",
+			},
+		},
+		{
+			name: "multiple json arrays separated by newlines",
+			input: `[
+  {
+    "message": "First array"
+  }
+]
+[
+  {
+    "message": "Second array"
+  }
+]`,
+			expected: []string{
+				"[\n  {\n    \"message\": \"First array\"\n  }\n]",
+				"[\n  {\n    \"message\": \"Second array\"\n  }\n]",
+			},
+		},
+		{
+			name: "mixed json and regular logs",
+			input: `2024-01-15T10:30:00Z INFO Starting application
+[
+  {
+    "data": "json array"
+  }
+]
+2024-01-15T10:30:05Z ERROR Failed to process`,
+			expected: []string{
+				"2024-01-15T10:30:00Z INFO Starting application",
+				"[\n  {\n    \"data\": \"json array\"\n  }\n]",
+				"2024-01-15T10:30:05Z ERROR Failed to process",
+			},
+		},
+		{
+			name: "closing bracket not alone on line is not continuation",
+			input: `2024-01-15T10:30:00Z INFO Data: [1, 2, 3]
+2024-01-15T10:30:01Z INFO Next log entry`,
+			expected: []string{
+				"2024-01-15T10:30:00Z INFO Data: [1, 2, 3]",
+				"2024-01-15T10:30:01Z INFO Next log entry",
+			},
+		},
+		{
+			name: "postgres explain analyze format",
+			input: `[
+  {
+    "Plan": {
+      "Node Type": "Limit",
+      "Plans": [
+        {
+          "Node Type": "Seq Scan"
+        }
+      ]
+    },
+    "Planning Time": 0.123,
+    "Execution Time": 4725.163
+  }
+]`,
+			expected: []string{
+				"[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Plans\": [\n        {\n          \"Node Type\": \"Seq Scan\"\n        }\n      ]\n    },\n    \"Planning Time\": 0.123,\n    \"Execution Time\": 4725.163\n  }\n]",
+			},
+		},
 	}
 
 	for _, tt := range tests {
