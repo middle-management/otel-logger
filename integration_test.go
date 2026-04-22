@@ -77,7 +77,10 @@ func TestJSONExtractionIntegration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			extractor := NewJSONExtractor(tt.prefix, tt.fieldMappings)
+			extractor, err := NewJSONExtractor(tt.prefix, tt.fieldMappings)
+			if err != nil {
+				t.Fatalf("NewJSONExtractor: %v", err)
+			}
 
 			var parsedEntries []*LogEntry
 			for _, input := range tt.input {
@@ -230,7 +233,10 @@ func TestFieldMappingPriorityIntegration(t *testing.T) {
 	for _, mappingConfig := range mappingConfigs {
 		for _, logInput := range logInputs {
 			t.Run(mappingConfig.name+"_"+logInput.name, func(t *testing.T) {
-				extractor := NewJSONExtractor("", mappingConfig.mappings)
+				extractor, err := NewJSONExtractor("", mappingConfig.mappings)
+				if err != nil {
+					t.Fatalf("NewJSONExtractor: %v", err)
+				}
 				entry, err := extractor.ParseLogEntry(logInput.input)
 
 				if err != nil {
@@ -278,7 +284,10 @@ func TestLogProcessingPipeline(t *testing.T) {
 		MessageFields:   config.MessageFields,
 	}
 
-	extractor := NewJSONExtractor(config.JSONPrefix, fieldMappings)
+	extractor, err := NewJSONExtractor(config.JSONPrefix, fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
 
 	// Test logs from different sources
 	testLogs := []string{
@@ -442,10 +451,11 @@ func TestCommandExecution(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := &Config{
-				Timeout:       5 * time.Second,
-				BatchSize:     10,
-				FlushInterval: 1 * time.Second,
-				Command:       tt.command,
+				Timeout:             5 * time.Second,
+				BatchSize:           10,
+				FlushInterval:       1 * time.Second,
+				ContinuationPattern: `^[ \t]`,
+				Command:             tt.command,
 			}
 
 			ctx := context.Background()
@@ -456,11 +466,15 @@ func TestCommandExecution(t *testing.T) {
 			defer provider.Shutdown(ctx)
 
 			fieldMappings := getDefaultFieldMappings()
-			extractor := NewJSONExtractor(config.JSONPrefix, fieldMappings)
+			extractor, err := NewJSONExtractor(config.JSONPrefix, fieldMappings)
+			if err != nil {
+				t.Fatalf("NewJSONExtractor: %v", err)
+			}
 			logger := provider.Logger("test-command")
 			processor := NewLogProcessor(logger)
+			continuationPattern := regexp.MustCompile(config.ContinuationPattern)
 
-			err = executeCommand(ctx, config, extractor, processor)
+			err = executeCommand(ctx, config, extractor, processor, continuationPattern)
 
 			if tt.expectError {
 				if err == nil {
@@ -588,7 +602,10 @@ func TestCommandWrappingIntegration(t *testing.T) {
 // BenchmarkCompleteLogProcessing benchmarks the complete log processing pipeline
 func BenchmarkCompleteLogProcessing(b *testing.B) {
 	fieldMappings := getDefaultFieldMappings()
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	testLog := `{"timestamp": "2024-01-15T10:30:45.123Z", "level": "info", "message": "User action completed", "user_id": 12345, "action": "login", "ip": "192.168.1.1", "user_agent": "Mozilla/5.0", "duration_ms": 234}`
 
@@ -610,7 +627,10 @@ func BenchmarkCompleteLogProcessing(b *testing.B) {
 // BenchmarkJSONExtraction benchmarks JSON extraction with prefixes
 func BenchmarkJSONExtraction(b *testing.B) {
 	fieldMappings := getDefaultFieldMappings()
-	extractor := NewJSONExtractor(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?\s*)?(.*)$`, fieldMappings)
+	extractor, err := NewJSONExtractor(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?\s*)?(.*)$`, fieldMappings)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	prefixedLog := `2024-01-15T10:30:45.123Z {"level": "info", "message": "Prefixed log entry", "service": "api"}`
 

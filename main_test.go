@@ -12,13 +12,23 @@ func TestNewJSONExtractor(t *testing.T) {
 		MessageFields:   []string{"message", "msg"},
 	}
 
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
 	if extractor == nil {
 		t.Fatal("Expected non-nil extractor")
 	}
 
 	if extractor.fieldMappings != fieldMappings {
 		t.Error("Field mappings not set correctly")
+	}
+}
+
+func TestNewJSONExtractor_InvalidRegex(t *testing.T) {
+	fieldMappings := getDefaultFieldMappings()
+	if _, err := NewJSONExtractor("[invalid", fieldMappings); err == nil {
+		t.Fatal("Expected error for invalid regex, got nil")
 	}
 }
 
@@ -58,7 +68,10 @@ func TestJSONExtractor_ExtractJSON(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fieldMappings := getDefaultFieldMappings()
-			extractor := NewJSONExtractor(tt.prefix, fieldMappings)
+			extractor, err := NewJSONExtractor(tt.prefix, fieldMappings)
+			if err != nil {
+				t.Fatalf("NewJSONExtractor: %v", err)
+			}
 			result := extractor.ExtractJSON(tt.input)
 			if result != tt.expected {
 				t.Errorf("ExtractJSON() = %v, want %v", result, tt.expected)
@@ -229,7 +242,10 @@ func TestJSONExtractor_ParseLogEntry(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			extractor := NewJSONExtractor("", tt.fieldMappings)
+			extractor, err := NewJSONExtractor("", tt.fieldMappings)
+			if err != nil {
+				t.Fatalf("NewJSONExtractor: %v", err)
+			}
 			entry, err := extractor.ParseLogEntry(tt.input)
 
 			if tt.shouldErr {
@@ -332,7 +348,10 @@ func TestFieldMappingPriority(t *testing.T) {
 		MessageFields:   []string{"message", "msg"},
 	}
 
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
 
 	// JSON with multiple possible timestamp fields
 	jsonStr := `{
@@ -370,7 +389,10 @@ func TestFieldMappingPriority(t *testing.T) {
 func TestPrefixedLogParsing(t *testing.T) {
 	fieldMappings := getDefaultFieldMappings()
 	prefix := `^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?\s*)?(.*)$`
-	extractor := NewJSONExtractor(prefix, fieldMappings)
+	extractor, err := NewJSONExtractor(prefix, fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
 
 	tests := []struct {
 		name     string
@@ -411,7 +433,10 @@ func TestPrefixedLogParsing(t *testing.T) {
 // Benchmark tests
 func BenchmarkParseLogEntry(b *testing.B) {
 	fieldMappings := getDefaultFieldMappings()
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		b.Fatal(err)
+	}
 	jsonLog := `{"timestamp": "2024-01-15T10:30:45Z", "level": "info", "message": "benchmark test", "user_id": 12345, "request_id": "req-abc123"}`
 
 	b.ResetTimer()
@@ -437,7 +462,10 @@ func BenchmarkParseTimestamp(b *testing.B) {
 
 func BenchmarkExtractJSON(b *testing.B) {
 	fieldMappings := getDefaultFieldMappings()
-	extractor := NewJSONExtractor(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?\s*)?(.*)$`, fieldMappings)
+	extractor, err := NewJSONExtractor(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?\s*)?(.*)$`, fieldMappings)
+	if err != nil {
+		b.Fatal(err)
+	}
 	prefixedLog := `2024-01-15T10:30:45.123Z {"level": "info", "message": "benchmark test"}`
 
 	b.ResetTimer()
@@ -471,7 +499,10 @@ func TestLogEntryStreamField(t *testing.T) {
 	}
 
 	fieldMappings := getDefaultFieldMappings()
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -507,7 +538,7 @@ func ExampleJSONExtractor_ParseLogEntry() {
 		MessageFields:   []string{"message"},
 	}
 
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, _ := NewJSONExtractor("", fieldMappings)
 	entry, _ := extractor.ParseLogEntry(`{"@timestamp": "2024-01-15T10:30:45Z", "level": "INFO", "message": "User logged in", "user_id": 12345}`)
 
 	// Output would be used in real application

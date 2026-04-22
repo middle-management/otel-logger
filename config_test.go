@@ -188,13 +188,55 @@ func TestConfigValidation(t *testing.T) {
 				Timeout:       10 * time.Second,
 				FlushInterval: 5 * time.Second,
 			},
-			wantErr: false, // Validation might happen at runtime
+			wantErr:   true,
+			errString: "--batch-size",
+		},
+		{
+			name: "zero batch size",
+			config: Config{
+				BatchSize:     0,
+				Timeout:       10 * time.Second,
+				FlushInterval: 5 * time.Second,
+			},
+			wantErr:   true,
+			errString: "--batch-size",
+		},
+		{
+			name: "zero timeout",
+			config: Config{
+				BatchSize:     50,
+				Timeout:       0,
+				FlushInterval: 5 * time.Second,
+			},
+			wantErr:   true,
+			errString: "--timeout",
+		},
+		{
+			name: "zero flush interval",
+			config: Config{
+				BatchSize:     50,
+				Timeout:       10 * time.Second,
+				FlushInterval: 0,
+			},
+			wantErr:   true,
+			errString: "--flush-interval",
+		},
+		{
+			name: "empty timestamp field",
+			config: Config{
+				BatchSize:       50,
+				Timeout:         10 * time.Second,
+				FlushInterval:   5 * time.Second,
+				TimestampFields: []string{"ts", ""},
+			},
+			wantErr:   true,
+			errString: "--timestamp-fields",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := runCommand(&tt.config)
+			err := tt.config.validate()
 
 			if tt.wantErr {
 				if err == nil {
@@ -202,12 +244,8 @@ func TestConfigValidation(t *testing.T) {
 				} else if tt.errString != "" && !containsString(err.Error(), tt.errString) {
 					t.Errorf("Expected error containing '%s', got '%s'", tt.errString, err.Error())
 				}
-			} else {
-				// For successful cases, we expect connection errors since we're not running a real server
-				// but we should not get configuration validation errors
-				if err != nil && containsString(err.Error(), "unsupported protocol") {
-					t.Errorf("Got configuration error when none expected: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("Unexpected error: %v", err)
 			}
 		})
 	}
