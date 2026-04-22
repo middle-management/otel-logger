@@ -30,6 +30,11 @@ var (
 	gitCommit = "unknown"
 )
 
+// maxLogLineSize caps the length of a single scanned input line in
+// multilineLogIterator. Anything longer will cause scanner.Err() to return
+// bufio.ErrTooLong rather than silent truncation.
+const maxLogLineSize = 1 << 20 // 1 MiB
+
 // Config holds all command-line arguments
 type Config struct {
 	Timeout             time.Duration `arg:"--timeout" default:"10s" help:"Request timeout"`
@@ -201,15 +206,16 @@ func (je *JSONExtractor) ExtractJSON(line string) string {
 	return line
 }
 
-// lookupField returns the first name in `names` that is present as a key in
-// `data`, along with its raw value. If none match, found is false.
-func lookupField(data map[string]any, names []string) (key string, value any, found bool) {
+// findStringField returns the first name in names whose value in data is a
+// string. Keys with non-string values are skipped so the priority list can
+// fall through to the next configured field name.
+func findStringField(data map[string]any, names []string) (key, value string, ok bool) {
 	for _, name := range names {
-		if v, ok := data[name]; ok {
+		if v, isStr := data[name].(string); isStr {
 			return name, v, true
 		}
 	}
-	return "", nil, false
+	return "", "", false
 }
 
 func (je *JSONExtractor) ParseLogEntry(line string) (*LogEntry, error) {
@@ -229,38 +235,42 @@ func (je *JSONExtractor) ParseLogEntry(line string) (*LogEntry, error) {
 		return entry, nil
 	}
 
-	if key, value, ok := lookupField(jsonData, je.fieldMappings.TimestampFields); ok {
-		switch v := value.(type) {
+	// Timestamp: first field whose value is a string or float64 wins. Fields
+	// with other types (bool, null, nested) are skipped so the priority list
+	// can fall through.
+	for _, name := range je.fieldMappings.TimestampFields {
+		raw, present := jsonData[name]
+		if !present {
+			continue
+		}
+		switch v := raw.(type) {
 		case string:
 			if t, err := parseTimestamp(v); err == nil {
 				entry.Timestamp = t
 			}
 		case float64:
 			entry.Timestamp = time.Unix(int64(v), 0)
+		default:
+			continue
 		}
-		delete(jsonData, key)
+		delete(jsonData, name)
+		break
 	}
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
 	}
 
-	if key, value, ok := lookupField(jsonData, je.fieldMappings.LevelFields); ok {
-		if s, isStr := value.(string); isStr {
-			entry.Level = s
-		}
+	if key, value, ok := findStringField(jsonData, je.fieldMappings.LevelFields); ok {
+		entry.Level = value
 		delete(jsonData, key)
-	}
-	if entry.Level == "" {
+	} else {
 		entry.Level = "info"
 	}
 
-	if key, value, ok := lookupField(jsonData, je.fieldMappings.MessageFields); ok {
-		if s, isStr := value.(string); isStr {
-			entry.Message = s
-		}
+	if key, value, ok := findStringField(jsonData, je.fieldMappings.MessageFields); ok {
+		entry.Message = value
 		delete(jsonData, key)
-	}
-	if entry.Message == "" {
+	} else {
 		entry.Message = "Log entry"
 	}
 
@@ -441,6 +451,10 @@ func multilineLogIterator(reader io.Reader, continuationPattern *regexp.Regexp) 
 
 	return func(yield func(string) bool) {
 		scanner := bufio.NewScanner(reader)
+		// Raise the per-line limit above bufio's 64 KiB default so long stack
+		// traces or large structured payloads (e.g. PostgreSQL EXPLAIN ANALYZE
+		// JSON) aren't silently truncated.
+		scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineSize)
 		var currentEntry strings.Builder
 
 		for scanner.Scan() {
@@ -473,7 +487,13 @@ func multilineLogIterator(reader io.Reader, continuationPattern *regexp.Regexp) 
 
 		// Yield the final entry if we have one
 		if currentEntry.Len() > 0 {
-			yield(currentEntry.String())
+			if !yield(currentEntry.String()) {
+				return
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			logError("scanner error while reading logs: %v\n", err)
 		}
 	}
 }

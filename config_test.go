@@ -385,14 +385,13 @@ func findString(s, substr string) int {
 // Benchmark configuration parsing
 func BenchmarkConfigParsing(b *testing.B) {
 	args := []string{
-		"--endpoint", "benchmark.example.com:4317",
-		"--protocol", "http",
-		"--service-name", "benchmark-service",
+		"--json-prefix", `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*`,
 		"--timestamp-fields", "timestamp",
 		"--level-fields", "level",
 		"--message-fields", "message",
 		"--batch-size", "100",
 		"--timeout", "30s",
+		"--flush-interval", "2s",
 	}
 
 	b.ResetTimer()
