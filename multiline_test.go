@@ -319,3 +319,27 @@ func BenchmarkMultilineLogIterator(b *testing.B) {
 		}
 	}
 }
+
+// TestMultilineLogIterator_HandlesLineAbove64KiB verifies that a single log
+// line larger than bufio.Scanner's 64 KiB default is read intact rather than
+// silently truncated.
+func TestMultilineLogIterator_HandlesLineAbove64KiB(t *testing.T) {
+	const payloadSize = 200 * 1024 // 200 KiB, well above 64 KiB default
+	line := "INFO " + strings.Repeat("a", payloadSize) + " end\n"
+	reader := strings.NewReader(line)
+
+	var got []string
+	for entry := range multilineLogIterator(reader, defaultContinuationPattern) {
+		got = append(got, entry)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(got))
+	}
+	if len(got[0]) != len(strings.TrimRight(line, "\n")) {
+		t.Errorf("entry was truncated: got %d bytes, want %d", len(got[0]), len(strings.TrimRight(line, "\n")))
+	}
+	if !strings.HasSuffix(got[0], " end") {
+		t.Errorf("entry end was lost: trailing %q", got[0][max(0, len(got[0])-10):])
+	}
+}

@@ -12,13 +12,23 @@ func TestNewJSONExtractor(t *testing.T) {
 		MessageFields:   []string{"message", "msg"},
 	}
 
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
 	if extractor == nil {
 		t.Fatal("Expected non-nil extractor")
 	}
 
 	if extractor.fieldMappings != fieldMappings {
 		t.Error("Field mappings not set correctly")
+	}
+}
+
+func TestNewJSONExtractor_InvalidRegex(t *testing.T) {
+	fieldMappings := getDefaultFieldMappings()
+	if _, err := NewJSONExtractor("[invalid", fieldMappings); err == nil {
+		t.Fatal("Expected error for invalid regex, got nil")
 	}
 }
 
@@ -58,7 +68,10 @@ func TestJSONExtractor_ExtractJSON(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fieldMappings := getDefaultFieldMappings()
-			extractor := NewJSONExtractor(tt.prefix, fieldMappings)
+			extractor, err := NewJSONExtractor(tt.prefix, fieldMappings)
+			if err != nil {
+				t.Fatalf("NewJSONExtractor: %v", err)
+			}
 			result := extractor.ExtractJSON(tt.input)
 			if result != tt.expected {
 				t.Errorf("ExtractJSON() = %v, want %v", result, tt.expected)
@@ -229,7 +242,10 @@ func TestJSONExtractor_ParseLogEntry(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			extractor := NewJSONExtractor("", tt.fieldMappings)
+			extractor, err := NewJSONExtractor("", tt.fieldMappings)
+			if err != nil {
+				t.Fatalf("NewJSONExtractor: %v", err)
+			}
 			entry, err := extractor.ParseLogEntry(tt.input)
 
 			if tt.shouldErr {
@@ -324,6 +340,77 @@ func TestConfig_Version(t *testing.T) {
 	}
 }
 
+// TestParseLogEntry_SkipsWrongTypedFields verifies that a priority field with
+// a non-matching type falls through to the next configured field name rather
+// than short-circuiting and using the default.
+func TestParseLogEntry_SkipsWrongTypedFields(t *testing.T) {
+	fieldMappings := &FieldMappings{
+		TimestampFields: []string{"ts", "timestamp"},
+		LevelFields:     []string{"level", "severity"},
+		MessageFields:   []string{"msg", "message"},
+	}
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
+
+	// ts is a bool (skip) -> timestamp is a string (use it).
+	// level is a number (skip) -> severity is a string (use it).
+	// msg is null (skip) -> message is a string (use it).
+	input := `{"ts": true, "timestamp": "2024-01-15T10:30:45Z",` +
+		` "level": 5, "severity": "high",` +
+		` "msg": null, "message": "ok"}`
+	entry, err := extractor.ParseLogEntry(input)
+	if err != nil {
+		t.Fatalf("ParseLogEntry: %v", err)
+	}
+
+	if entry.Level != "high" {
+		t.Errorf("Level: got %q, want %q", entry.Level, "high")
+	}
+	if entry.Message != "ok" {
+		t.Errorf("Message: got %q, want %q", entry.Message, "ok")
+	}
+	expected, _ := parseTimestamp("2024-01-15T10:30:45Z")
+	if !entry.Timestamp.Equal(expected) {
+		t.Errorf("Timestamp: got %v, want %v", entry.Timestamp, expected)
+	}
+
+	// Wrong-typed fields should still be present in the extra fields map
+	// because we didn't consume them.
+	for _, k := range []string{"ts", "level", "msg"} {
+		if _, ok := entry.Fields[k]; !ok {
+			t.Errorf("expected wrong-typed %q to remain in Fields, got %+v", k, entry.Fields)
+		}
+	}
+}
+
+// TestParseLogEntry_PreservesEmptyString verifies that an explicit empty
+// string in a mapped field is kept as-is rather than silently replaced with
+// the default value.
+func TestParseLogEntry_PreservesEmptyString(t *testing.T) {
+	fieldMappings := &FieldMappings{
+		TimestampFields: []string{"timestamp"},
+		LevelFields:     []string{"level"},
+		MessageFields:   []string{"message"},
+	}
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
+
+	entry, err := extractor.ParseLogEntry(`{"level": "", "message": ""}`)
+	if err != nil {
+		t.Fatalf("ParseLogEntry: %v", err)
+	}
+	if entry.Level != "" {
+		t.Errorf("Level: got %q, want empty string (not default)", entry.Level)
+	}
+	if entry.Message != "" {
+		t.Errorf("Message: got %q, want empty string (not default)", entry.Message)
+	}
+}
+
 func TestFieldMappingPriority(t *testing.T) {
 	// Test that field mappings use the first match
 	fieldMappings := &FieldMappings{
@@ -332,7 +419,10 @@ func TestFieldMappingPriority(t *testing.T) {
 		MessageFields:   []string{"message", "msg"},
 	}
 
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
 
 	// JSON with multiple possible timestamp fields
 	jsonStr := `{
@@ -370,7 +460,10 @@ func TestFieldMappingPriority(t *testing.T) {
 func TestPrefixedLogParsing(t *testing.T) {
 	fieldMappings := getDefaultFieldMappings()
 	prefix := `^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?\s*)?(.*)$`
-	extractor := NewJSONExtractor(prefix, fieldMappings)
+	extractor, err := NewJSONExtractor(prefix, fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
 
 	tests := []struct {
 		name     string
@@ -411,7 +504,10 @@ func TestPrefixedLogParsing(t *testing.T) {
 // Benchmark tests
 func BenchmarkParseLogEntry(b *testing.B) {
 	fieldMappings := getDefaultFieldMappings()
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		b.Fatal(err)
+	}
 	jsonLog := `{"timestamp": "2024-01-15T10:30:45Z", "level": "info", "message": "benchmark test", "user_id": 12345, "request_id": "req-abc123"}`
 
 	b.ResetTimer()
@@ -437,7 +533,10 @@ func BenchmarkParseTimestamp(b *testing.B) {
 
 func BenchmarkExtractJSON(b *testing.B) {
 	fieldMappings := getDefaultFieldMappings()
-	extractor := NewJSONExtractor(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?\s*)?(.*)$`, fieldMappings)
+	extractor, err := NewJSONExtractor(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?\s*)?(.*)$`, fieldMappings)
+	if err != nil {
+		b.Fatal(err)
+	}
 	prefixedLog := `2024-01-15T10:30:45.123Z {"level": "info", "message": "benchmark test"}`
 
 	b.ResetTimer()
@@ -471,7 +570,10 @@ func TestLogEntryStreamField(t *testing.T) {
 	}
 
 	fieldMappings := getDefaultFieldMappings()
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, err := NewJSONExtractor("", fieldMappings)
+	if err != nil {
+		t.Fatalf("NewJSONExtractor: %v", err)
+	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -507,7 +609,7 @@ func ExampleJSONExtractor_ParseLogEntry() {
 		MessageFields:   []string{"message"},
 	}
 
-	extractor := NewJSONExtractor("", fieldMappings)
+	extractor, _ := NewJSONExtractor("", fieldMappings)
 	entry, _ := extractor.ParseLogEntry(`{"@timestamp": "2024-01-15T10:30:45Z", "level": "INFO", "message": "User logged in", "user_id": 12345}`)
 
 	// Output would be used in real application

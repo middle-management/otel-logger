@@ -30,6 +30,11 @@ var (
 	gitCommit = "unknown"
 )
 
+// maxLogLineSize caps the length of a single scanned input line in
+// multilineLogIterator. Anything longer will cause scanner.Err() to return
+// bufio.ErrTooLong rather than silent truncation.
+const maxLogLineSize = 1 << 20 // 1 MiB
+
 // Config holds all command-line arguments
 type Config struct {
 	Timeout             time.Duration `arg:"--timeout" default:"10s" help:"Request timeout"`
@@ -48,6 +53,34 @@ type Config struct {
 
 func (Config) Version() string {
 	return fmt.Sprintf("otel-logger %s (commit: %s)", version, gitCommit)
+}
+
+func (c *Config) validate() error {
+	if c.BatchSize <= 0 {
+		return fmt.Errorf("--batch-size must be > 0 (got %d)", c.BatchSize)
+	}
+	if c.Timeout <= 0 {
+		return fmt.Errorf("--timeout must be > 0 (got %v)", c.Timeout)
+	}
+	if c.FlushInterval <= 0 {
+		return fmt.Errorf("--flush-interval must be > 0 (got %v)", c.FlushInterval)
+	}
+	for _, f := range c.TimestampFields {
+		if f == "" {
+			return fmt.Errorf("--timestamp-fields contains an empty value")
+		}
+	}
+	for _, f := range c.LevelFields {
+		if f == "" {
+			return fmt.Errorf("--level-fields contains an empty value")
+		}
+	}
+	for _, f := range c.MessageFields {
+		if f == "" {
+			return fmt.Errorf("--message-fields contains an empty value")
+		}
+	}
+	return nil
 }
 
 func (Config) Description() string {
@@ -139,18 +172,21 @@ type LogProcessor struct {
 	logger log.Logger
 }
 
-func NewJSONExtractor(prefix string, fieldMappings *FieldMappings) *JSONExtractor {
-	var regex *regexp.Regexp
+var defaultPrefixRegex = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}[.\d]*[Z\-+\d:]*\s*)?(.*)$`)
+
+func NewJSONExtractor(prefix string, fieldMappings *FieldMappings) (*JSONExtractor, error) {
+	regex := defaultPrefixRegex
 	if prefix != "" {
-		regex = regexp.MustCompile(prefix)
-	} else {
-		// Default pattern to match common timestamp prefixes
-		regex = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}[.\d]*[Z\-+\d:]*\s*)?(.*)$`)
+		r, err := regexp.Compile(prefix)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --json-prefix regex %q: %w", prefix, err)
+		}
+		regex = r
 	}
 	return &JSONExtractor{
 		prefixRegex:   regex,
 		fieldMappings: fieldMappings,
-	}
+	}, nil
 }
 
 func (je *JSONExtractor) ExtractJSON(line string) string {
@@ -170,16 +206,26 @@ func (je *JSONExtractor) ExtractJSON(line string) string {
 	return line
 }
 
+// findStringField returns the first name in names whose value in data is a
+// string. Keys with non-string values are skipped so the priority list can
+// fall through to the next configured field name.
+func findStringField(data map[string]any, names []string) (key, value string, ok bool) {
+	for _, name := range names {
+		if v, isStr := data[name].(string); isStr {
+			return name, v, true
+		}
+	}
+	return "", "", false
+}
+
 func (je *JSONExtractor) ParseLogEntry(line string) (*LogEntry, error) {
 	entry := &LogEntry{
 		Fields: make(map[string]any),
 		Raw:    line,
 	}
 
-	// Extract JSON from the line
 	jsonStr := je.ExtractJSON(line)
 
-	// Try to parse as JSON
 	var jsonData map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &jsonData); err != nil {
 		// If JSON parsing fails, treat the entire line as a message
@@ -189,57 +235,45 @@ func (je *JSONExtractor) ParseLogEntry(line string) (*LogEntry, error) {
 		return entry, nil
 	}
 
-	// Extract timestamp using configurable field mappings
-	timestampExtracted := false
-	for _, field := range je.fieldMappings.TimestampFields {
-		if timestampStr, ok := jsonData[field].(string); ok {
-			if t, err := parseTimestamp(timestampStr); err == nil {
-				entry.Timestamp = t
-				timestampExtracted = true
-			}
-			delete(jsonData, field)
-			break
-		} else if timestampNum, ok := jsonData[field].(float64); ok {
-			entry.Timestamp = time.Unix(int64(timestampNum), 0)
-			timestampExtracted = true
-			delete(jsonData, field)
-			break
+	// Timestamp: first field whose value is a string or float64 wins. Fields
+	// with other types (bool, null, nested) are skipped so the priority list
+	// can fall through.
+	for _, name := range je.fieldMappings.TimestampFields {
+		raw, present := jsonData[name]
+		if !present {
+			continue
 		}
+		switch v := raw.(type) {
+		case string:
+			if t, err := parseTimestamp(v); err == nil {
+				entry.Timestamp = t
+			}
+		case float64:
+			entry.Timestamp = time.Unix(int64(v), 0)
+		default:
+			continue
+		}
+		delete(jsonData, name)
+		break
 	}
-
-	if !timestampExtracted || entry.Timestamp.IsZero() {
+	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
 	}
 
-	// Extract level using configurable field mappings
-	levelExtracted := false
-	for _, field := range je.fieldMappings.LevelFields {
-		if level, ok := jsonData[field].(string); ok {
-			entry.Level = level
-			levelExtracted = true
-			delete(jsonData, field)
-			break
-		}
-	}
-	if !levelExtracted {
+	if key, value, ok := findStringField(jsonData, je.fieldMappings.LevelFields); ok {
+		entry.Level = value
+		delete(jsonData, key)
+	} else {
 		entry.Level = "info"
 	}
 
-	// Extract message using configurable field mappings
-	messageExtracted := false
-	for _, field := range je.fieldMappings.MessageFields {
-		if message, ok := jsonData[field].(string); ok {
-			entry.Message = message
-			messageExtracted = true
-			delete(jsonData, field)
-			break
-		}
-	}
-	if !messageExtracted {
+	if key, value, ok := findStringField(jsonData, je.fieldMappings.MessageFields); ok {
+		entry.Message = value
+		delete(jsonData, key)
+	} else {
 		entry.Message = "Log entry"
 	}
 
-	// Store remaining fields
 	entry.Fields = jsonData
 
 	return entry, nil
@@ -417,6 +451,10 @@ func multilineLogIterator(reader io.Reader, continuationPattern *regexp.Regexp) 
 
 	return func(yield func(string) bool) {
 		scanner := bufio.NewScanner(reader)
+		// Raise the per-line limit above bufio's 64 KiB default so long stack
+		// traces or large structured payloads (e.g. PostgreSQL EXPLAIN ANALYZE
+		// JSON) aren't silently truncated.
+		scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineSize)
 		var currentEntry strings.Builder
 
 		for scanner.Scan() {
@@ -449,17 +487,18 @@ func multilineLogIterator(reader io.Reader, continuationPattern *regexp.Regexp) 
 
 		// Yield the final entry if we have one
 		if currentEntry.Len() > 0 {
-			yield(currentEntry.String())
+			if !yield(currentEntry.String()) {
+				return
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			logError("scanner error while reading logs: %v\n", err)
 		}
 	}
 }
 
-func processLogs(ctx context.Context, config *Config, extractor *JSONExtractor, processor *LogProcessor) error {
-	continuationPattern, err := regexp.Compile(config.ContinuationPattern)
-	if err != nil {
-		return fmt.Errorf("failed to compile continuation pattern: %w", err)
-	}
-
+func processLogs(ctx context.Context, extractor *JSONExtractor, processor *LogProcessor, continuationPattern *regexp.Regexp) error {
 	for logEntry := range multilineLogIterator(os.Stdin, continuationPattern) {
 		entry, err := extractor.ParseLogEntry(logEntry)
 		if err != nil {
@@ -497,14 +536,9 @@ func processStream(ctx context.Context, reader io.Reader, stream string, extract
 }
 
 // executeCommand executes the given command and processes its output
-func executeCommand(ctx context.Context, config *Config, extractor *JSONExtractor, processor *LogProcessor) error {
+func executeCommand(ctx context.Context, config *Config, extractor *JSONExtractor, processor *LogProcessor, continuationPattern *regexp.Regexp) error {
 	if len(config.Command) == 0 {
 		return fmt.Errorf("no command specified")
-	}
-
-	continuationPattern, err := regexp.Compile(config.ContinuationPattern)
-	if err != nil {
-		return fmt.Errorf("failed to compile continuation pattern: %w", err)
 	}
 
 	// Create command
@@ -544,6 +578,7 @@ func executeCommand(ctx context.Context, config *Config, extractor *JSONExtracto
 	// Set up signal forwarding
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 
 	// Wait for command completion or signal
 	done := make(chan error, 1)
@@ -556,7 +591,9 @@ func executeCommand(ctx context.Context, config *Config, extractor *JSONExtracto
 	case sig := <-sigChan:
 		logInfo(config.Verbose, "Received signal %v, forwarding to process...\n", sig)
 		if cmd.Process != nil {
-			cmd.Process.Signal(sig)
+			if err := cmd.Process.Signal(sig); err != nil {
+				logError("Failed to forward signal %v: %v\n", sig, err)
+			}
 		}
 		cmdErr = <-done
 	case cmdErr = <-done:
@@ -600,22 +637,16 @@ func executeCommand(ctx context.Context, config *Config, extractor *JSONExtracto
 }
 
 func runCommand(config *Config) error {
+	if err := config.validate(); err != nil {
+		return err
+	}
+
 	ctx := context.Background()
 
-	// Create logger provider using OTEL SDK
-	provider, err := createLoggerProvider(ctx, config)
+	continuationPattern, err := regexp.Compile(config.ContinuationPattern)
 	if err != nil {
-		return fmt.Errorf("failed to create logger provider: %w", err)
+		return fmt.Errorf("invalid --continuation-pattern regex %q: %w", config.ContinuationPattern, err)
 	}
-	defer func() {
-		if err := provider.Shutdown(ctx); err != nil {
-			logError("Error shutting down logger provider: %v\n", err)
-		}
-	}()
-
-	// Create logger and processor
-	logger := provider.Logger("otel-logger")
-	processor := NewLogProcessor(logger)
 
 	// Create field mappings
 	fieldMappings := getDefaultFieldMappings()
@@ -629,8 +660,26 @@ func runCommand(config *Config) error {
 		fieldMappings.LevelFields = config.LevelFields
 	}
 
-	// Create JSON extractor
-	extractor := NewJSONExtractor(config.JSONPrefix, fieldMappings)
+	extractor, err := NewJSONExtractor(config.JSONPrefix, fieldMappings)
+	if err != nil {
+		return err
+	}
+
+	// Create logger provider using OTEL SDK
+	provider, err := createLoggerProvider(ctx, config)
+	if err != nil {
+		return fmt.Errorf("failed to create logger provider: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+		defer cancel()
+		if err := provider.Shutdown(shutdownCtx); err != nil {
+			logError("Error shutting down logger provider: %v\n", err)
+		}
+	}()
+
+	logger := provider.Logger("otel-logger")
+	processor := NewLogProcessor(logger)
 
 	logInfo(config.Verbose, "Field mappings - Timestamp: %v, Level: %v, Message: %v\n",
 		fieldMappings.TimestampFields, fieldMappings.LevelFields, fieldMappings.MessageFields)
@@ -639,17 +688,17 @@ func runCommand(config *Config) error {
 
 	// Check if we should execute a command or read from stdin
 	if len(config.Command) > 0 {
-		// Execute command and process its output
 		logInfo(config.Verbose, "Executing command and sending logs (batch_size=%d)\n", config.BatchSize)
-		processingErr = executeCommand(ctx, config, extractor, processor)
+		processingErr = executeCommand(ctx, config, extractor, processor, continuationPattern)
 	} else {
-		// Process logs from stdin
 		logInfo(config.Verbose, "Reading logs from stdin and sending (batch_size=%d)\n", config.BatchSize)
-		processingErr = processLogs(ctx, config, extractor, processor)
+		processingErr = processLogs(ctx, extractor, processor, continuationPattern)
 	}
 
-	// Force flush before exit
-	if err := provider.ForceFlush(ctx); err != nil {
+	// Force flush before exit, bounded by Timeout so a slow collector can't hang us.
+	flushCtx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	defer cancel()
+	if err := provider.ForceFlush(flushCtx); err != nil {
 		return fmt.Errorf("failed to flush logs: %w", err)
 	}
 
