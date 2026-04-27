@@ -3,7 +3,7 @@ module github.com/middle-management/otel-logger
 go 1.25.5
 
 require (
-	github.com/alexflint/go-arg v1.6.0
+	github.com/alexflint/go-arg v1.6.1
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.15.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.15.0
